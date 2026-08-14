@@ -15,7 +15,7 @@ import jellyfish
 from ..config import SETTINGS
 
 # Signal keys we treat as strong, unique identifiers.
-STRONG = {"email", "gravatar_hash", "orcid", "phone_e164", "domain"}
+STRONG = {"email", "gravatar_hash", "orcid", "phone_e164"}
 
 
 @dataclass
@@ -57,7 +57,7 @@ def record_from(obs_id: int, category: str, label: str,
 # Per-attribute weights (log-likelihood-ish; tuned, not learned).
 _W = {
     "gravatar_hash": 9.0, "orcid": 9.0, "email": 8.0,
-    "phone_e164": 8.0, "domain": 6.0,
+    "phone_e164": 8.0,
 }
 
 

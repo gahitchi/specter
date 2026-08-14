@@ -28,8 +28,7 @@ def _headers(ctx: ModuleContext) -> dict:
 
 
 async def _get(ctx: ModuleContext, path: str):
-    # Custom headers -> use the shared client directly (mirrors collectors/name.py).
-    return await ctx.client._client.get(f"{_API}{path}", headers=_headers(ctx))
+    return await ctx.client.fetch(f"{_API}{path}", headers=_headers(ctx))
 
 
 async def _run(art: Artifact, ctx: ModuleContext) -> None:
@@ -87,7 +86,7 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
             email = (commit.get("author") or {}).get("email", "")
             if email and "noreply.github.com" not in email:
                 emails.add(email.lower())
-    emails = set(list(emails)[:_MAX_EMAILS])
+    emails = sorted(emails)[:_MAX_EMAILS]
     if emails:
         await ctx.emit_finding(Finding(
             source="github:commits", category="email",

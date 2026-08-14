@@ -1,6 +1,6 @@
 """The event-driven recursive scan engine.
 
-A scan is a breadth-first graph traversal. Seed identifiers become depth-0
+A scan is a best-first graph traversal. Seed identifiers become depth-0
 artifacts; each artifact is dispatched to every module that consumes its type;
 modules emit findings (streamed live) and new artifacts (pivots) that are
 deduped, scope-checked, and budget-checked before being fed back into the
@@ -8,28 +8,31 @@ frontier. This is the capability that turns single-pass collection into the
 recursive, self-pivoting traversal that defines tools like SpiderFoot — kept
 honest here by hard depth/artifact/request ceilings and a scope policy.
 
-The engine yields the SAME event-dict contract the old `run_stream` did
-(`{"type": "finding"|"summary"|"done"|"error", ...}`), so the CLI, SSE server,
-and `scan()` persistence path need no signature changes. Discovered artifacts
-and the edges between them are exposed on the instance (`.artifacts`, `.edges`)
-for persistence and graph inspection.
+The engine preserves the event-dict contract used by the CLI, SSE server, and
+persistence path while adding `activity` and `reasoning` events. Discovered
+artifacts and the edges between them are exposed on the instance
+(`.artifacts`, `.edges`) for persistence and graph inspection.
 """
 
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 
+from .activity import ACTIVE_PROCESS_ID, artifact_activity_id
 from .config import SETTINGS, Settings
 from .correlate import score
-from .correlate.cluster import cluster
+from .correlate.cluster import cluster, identity_bearing
 from .graph_models import Artifact, ArtifactType
-from .http_client import RateLimitedClient
-from .keys import VAULT
+from .http_client import RateLimitedClient, RequestBudgetExceeded
+from .keys import VAULT, redact
 from .models import Finding, Query
 from .modules.base import ModuleContext
 from .modules.registry import applicable_modules
+from .reasoning import InvestigationReasoner
 
 # Artifact types that descend from an in-scope parent and are always safe to
 # expand in strict mode (they can't broaden the investigation's subject).
@@ -130,14 +133,18 @@ class _Edge:
 
 
 class GraphScanEngine:
-    def __init__(self, query: Query, settings: Settings = SETTINGS) -> None:
+    def __init__(self, query: Query, settings: Settings = SETTINGS,
+                 intake: dict | None = None) -> None:
         self.query = query.normalized()
         self.settings = settings
+        self.intake = intake
         self.scope = ScopePolicy.from_query(self.query, settings.scope_mode)
         # Results exposed for persistence / inspection.
         self.artifacts: list[Artifact] = []
         self.edges: list[_Edge] = []
         self.stop_reason: Optional[str] = None
+        self.reasoning: dict = {}
+        self.reasoner = InvestigationReasoner()
         # Traversal state.
         self._seen: set[str] = set()
 
@@ -176,70 +183,201 @@ class GraphScanEngine:
             yield {"type": "error", "message": "no identifiers provided"}
             return
 
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue[dict | None] = asyncio.Queue()
         collected: list[Finding] = []
+        activity_sequence = 0
+        process_sequence = 0
+        activity_lock = asyncio.Lock()
+        fatal_error: str | None = None
+
+        async def emit_activity(activity: dict) -> None:
+            nonlocal activity_sequence
+            async with activity_lock:
+                activity_sequence += 1
+                payload = {
+                    "sequence": activity_sequence,
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                    **activity,
+                }
+                payload.setdefault(
+                    "id", f"{payload.get('kind', 'activity')}:{activity_sequence}"
+                )
+                await queue.put({"type": "activity", "activity": payload})
 
         async def emit_finding(f: Finding) -> None:
             collected.append(f)
-            await queue.put(f)
+            await queue.put({"type": "finding", "finding": f.model_dump()})
 
         # next_frontier is rebound each wave; the closure reads the current one.
         state = {"next": []}
 
-        async def emit_artifact(a: Artifact) -> None:
+        async def emit_artifact(a: Artifact) -> bool:
             if a.parent_key:  # always record provenance, even for dup/oob nodes
                 self.edges.append(_Edge(a.parent_key, a.key, a.source_module, a.data.get("edge", {})))
             if not self._admit_node(a):
-                return
+                return False
             if self._should_expand(a):
                 state["next"].append(a)
+            return True
+
+        def process_outcome(metrics: dict) -> str:
+            verdicts = set(metrics.get("verdicts", []))
+            if "FOUND" in verdicts or metrics.get("artifacts", 0):
+                return "success"
+            if verdicts & {"UNCERTAIN", "UNVERIFIABLE"}:
+                return "uncertain"
+            if "ERROR" in verdicts:
+                return "error"
+            return "not_found"
 
         async def worker() -> None:
-            async with RateLimitedClient(self.settings) as client:
-                ctx = ModuleContext(
-                    client=client, query=self.query, settings=self.settings,
-                    in_scope=self.scope.in_scope,
-                    _emit_finding=emit_finding, _emit_artifact=emit_artifact,
-                )
-                # Seed the frontier (seeds are always admitted + expanded).
-                frontier: list[Artifact] = []
-                for seed in self.query.to_seed_artifacts():
-                    if self._admit_node(seed):
-                        frontier.append(seed)
-                frontier.sort(key=self._priority, reverse=True)
+            nonlocal fatal_error, process_sequence
+            from .ratelimit import get_limiter
 
-                batch_size = max(1, self.settings.max_concurrency)
-                while frontier:
-                    if client.request_count >= self.settings.max_requests:
-                        self.stop_reason = self.stop_reason or "max_requests reached"
-                        break
-                    state["next"] = []
-                    # Flatten the (best-first) frontier into ordered dispatches so
-                    # the budget can cut in mid-wave: high-yield leads are expanded
-                    # before low-value breadcrumbs when requests run short.
-                    dispatches = [
-                        (art, mod)
-                        for art in frontier
-                        for mod in applicable_modules(art)
-                        if self._module_enabled(mod)
-                    ]
-                    stopped = False
-                    for i in range(0, len(dispatches), batch_size):
-                        # Real-request budget, checked between batches (a single
-                        # fan-out module can still overshoot within its own batch).
+            try:
+                async with RateLimitedClient(
+                    self.settings,
+                    limiter=get_limiter(self.settings),
+                    activity_callback=emit_activity,
+                ) as client:
+                    ctx = ModuleContext(
+                        client=client, query=self.query, settings=self.settings,
+                        in_scope=self.scope.in_scope,
+                        _emit_finding=emit_finding, _emit_artifact=emit_artifact,
+                        _emit_activity=emit_activity,
+                    )
+                    # Seed the frontier (seeds are always admitted + expanded).
+                    frontier: list[Artifact] = []
+                    for seed in self.query.to_seed_artifacts():
+                        if self._admit_node(seed):
+                            frontier.append(seed)
+                            await emit_activity({
+                                "kind": "artifact",
+                                "id": artifact_activity_id(seed.key),
+                                "parent_id": None,
+                                "phase": "seeded",
+                                "status": "finished",
+                                "outcome": "success",
+                                "artifact_type": seed.type.value,
+                                "label": seed.value,
+                                "module": "seed",
+                                "confidence": seed.confidence,
+                                "depth": 0,
+                                "in_scope": True,
+                            })
+                    frontier.sort(key=self._priority, reverse=True)
+
+                    async def run_dispatch(art: Artifact, mod, process_id: str) -> None:
+                        dispatch_ctx = ctx.for_dispatch(process_id)
+                        base_activity = {
+                            "kind": "process",
+                            "id": process_id,
+                            "parent_id": artifact_activity_id(art.key),
+                            "module": mod.name,
+                            "label": mod.name,
+                            "artifact_id": artifact_activity_id(art.key),
+                            "artifact_type": art.type.value,
+                            "artifact_label": art.value,
+                        }
+                        await emit_activity({
+                            **base_activity,
+                            "phase": "started",
+                            "status": "running",
+                        })
+                        token = ACTIVE_PROCESS_ID.set(process_id)
+                        try:
+                            await mod.run_resilient(art, dispatch_ctx)
+                        except RequestBudgetExceeded:
+                            await emit_activity({
+                                **base_activity,
+                                "phase": "stopped",
+                                "status": "finished",
+                                "outcome": "error",
+                                "error": "request budget exhausted",
+                            })
+                            raise
+                        except Exception as exc:
+                            await emit_activity({
+                                **base_activity,
+                                "phase": "failed",
+                                "status": "finished",
+                                "outcome": "error",
+                                "error": redact(str(exc))[:300],
+                            })
+                            raise
+                        else:
+                            metrics = dispatch_ctx.activity_metrics or {}
+                            await emit_activity({
+                                **base_activity,
+                                "phase": "finished",
+                                "status": "finished",
+                                "outcome": process_outcome(metrics),
+                                "findings": len(metrics.get("verdicts", [])),
+                                "artifacts": metrics.get("artifacts", 0),
+                            })
+                        finally:
+                            ACTIVE_PROCESS_ID.reset(token)
+
+                    batch_size = max(1, self.settings.max_concurrency)
+                    while frontier:
                         if client.request_count >= self.settings.max_requests:
                             self.stop_reason = self.stop_reason or "max_requests reached"
-                            stopped = True
                             break
-                        batch = dispatches[i:i + batch_size]
-                        await asyncio.gather(
-                            *(mod.run_resilient(art, ctx) for art, mod in batch),
-                            return_exceptions=True,
+                        state["next"] = []
+                        # Flatten the best-first frontier into ordered dispatches
+                        # so a tight budget is spent on the strongest leads first.
+                        dispatches = [
+                            (art, mod)
+                            for art in frontier
+                            for mod in (
+                                applicable_modules(art, expansion_enabled=True)
+                                if self.settings.expansion_requested
+                                else applicable_modules(art)
+                            )
+                            if self._module_enabled(mod)
+                        ]
+                        dispatches = self.reasoner.rank_dispatches(
+                            frontier,
+                            dispatches,
+                            collected,
+                            self.artifacts,
+                            self.settings.max_requests - client.request_count,
                         )
-                    if stopped:
-                        break
-                    frontier = sorted(state["next"], key=self._priority, reverse=True)
-            await queue.put(None)  # sentinel
+                        stopped = False
+                        for i in range(0, len(dispatches), batch_size):
+                            if client.request_count >= self.settings.max_requests:
+                                self.stop_reason = self.stop_reason or "max_requests reached"
+                                stopped = True
+                                break
+                            batch = dispatches[i:i + batch_size]
+                            scheduled = []
+                            for art, mod in batch:
+                                process_sequence += 1
+                                scheduled.append(run_dispatch(
+                                    art, mod, f"process:{process_sequence}"
+                                ))
+                            results = await asyncio.gather(
+                                *scheduled, return_exceptions=True
+                            )
+                            if client.budget_exhausted or any(
+                                isinstance(result, RequestBudgetExceeded)
+                                for result in results
+                            ):
+                                self.stop_reason = self.stop_reason or "max_requests reached"
+                                stopped = True
+                                break
+                        if stopped:
+                            break
+                        frontier = sorted(
+                            state["next"], key=self._priority, reverse=True
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - terminate the stream cleanly
+                fatal_error = redact(str(exc))
+                await queue.put({"type": "error", "message": fatal_error})
+            finally:
+                await queue.put(None)
 
         task = asyncio.create_task(worker())
         try:
@@ -247,12 +385,46 @@ class GraphScanEngine:
                 item = await queue.get()
                 if item is None:
                     break
-                yield {"type": "finding", "finding": item.model_dump()}
+                yield item
         finally:
-            await task
+            if not task.done():
+                task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
-        identities = cluster([f for f in collected if f.is_hit])
-        yield {"type": "summary", "summary": score.summarize(identities)}
+        if fatal_error is not None:
+            return
+
+        identities = cluster([
+            f for f in collected if f.is_hit and identity_bearing(f.category)
+        ])
+        summary = score.summarize(identities)
+        from .profile import synthesize_profile
+
+        summary["profile"] = synthesize_profile(
+            self.query,
+            collected,
+            self.artifacts,
+            summary,
+            intake=self.intake,
+            stop_reason=self.stop_reason,
+        )
+        yield {"type": "summary", "summary": summary}
+        out_of_scope = [
+            artifact for artifact in self.artifacts
+            if artifact.depth > 0 and not self.scope.in_scope(artifact)
+        ]
+        self.reasoning = self.reasoner.report(
+            self.query,
+            collected,
+            self.artifacts,
+            summary,
+            stop_reason=self.stop_reason,
+            scope_mode=self.settings.scope_mode,
+            passive_only=self.settings.passive_only,
+            out_of_scope=out_of_scope,
+        )
+        yield {"type": "reasoning", "reasoning": self.reasoning}
         yield {
             "type": "done",
             "total": len(collected),

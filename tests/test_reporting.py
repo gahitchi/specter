@@ -48,13 +48,50 @@ def test_to_csv_has_header_and_one_row_per_finding():
     assert "site rule matched | status 200 vs baseline 404" in csv_text
 
 
-def test_to_pdf_html_only_renders_hits():
+def test_to_pdf_html_renders_notable_findings():
     html = reporting.to_pdf_html(Query(username="torvalds"), _findings(), {"hits": 1})
-    # FOUND + UNCERTAIN are hits; NOT_FOUND is not rendered as a row.
+    # UNCERTAIN stays visible and clearly labeled, but is not counted as a hit.
     assert "GitHub torvalds" in html
     assert "Medium torvalds" in html
     assert "PyPI torvalds" not in html
     assert reporting.DISCLAIMER in html
+
+
+def test_to_pdf_html_renders_profile_standing_and_gaps():
+    summary = {
+        "identities": 0,
+        "profile": {
+            "title": "alice",
+            "status": "partial",
+            "confidence": 0.72,
+            "assessment": "Confirmed account; independent corroboration remains limited.",
+            "identifiers": [{
+                "type": "username", "value": "alice", "standing": "provided",
+                "confidence": 1.0,
+            }],
+            "accounts": [],
+            "gaps": ["No contact identifier was independently confirmed."],
+            "completeness_note": "Evidence coverage is not proof of completeness.",
+        },
+    }
+
+    html = reporting.to_pdf_html(Query(username="alice"), _findings(), summary)
+
+    assert "Profile synthesis" in html
+    assert "provided" in html
+    assert "No contact identifier" in html
+
+
+def test_html_and_csv_escape_untrusted_source_text():
+    findings = [Finding(
+        source="<script>alert(1)</script>", category="account", label="=CMD()",
+        verdict=Verdict.FOUND, confidence=0.9, reasons=["<img src=x onerror=alert(1)>"],
+    )]
+    html = reporting.to_pdf_html(Query(username="<x>"), findings, {})
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html and "&lt;img" in html
+    csv_text = reporting.to_csv(findings)
+    assert "'=CMD()" in csv_text
 
 
 def test_save_json_writes_file(tmp_path):

@@ -1,0 +1,13 @@
+{
+  "canaries": [
+    {
+      "name": "replace-with-designated-test-account",
+      "module": "github",
+      "artifact": {"type": "username", "value": "replace-me"},
+      "query": {"username": "replace-me"},
+      "expect": {"source_prefix": "github:user", "verdicts": ["FOUND"], "minimum": 1},
+      "max_requests": 5,
+      "timeout_seconds": 30
+    }
+  ]
+}

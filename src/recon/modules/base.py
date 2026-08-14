@@ -10,16 +10,18 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
+from ..activity import ActivityCallback, artifact_activity_id, safe_display_url
 from ..config import Settings
 from ..connectors import cache
 from ..graph_models import Artifact, ArtifactType
-from ..http_client import RateLimitedClient
+from ..http_client import RateLimitedClient, RequestBudgetExceeded
+from ..keys import redact
 from ..models import Finding, Query, Verdict
 
 EmitFinding = Callable[[Finding], Awaitable[None]]
-EmitArtifact = Callable[[Artifact], Awaitable[None]]
+EmitArtifact = Callable[[Artifact], Awaitable[bool | None]]
 
 
 @dataclass
@@ -34,12 +36,66 @@ class ModuleContext:
     in_scope: Callable[[Artifact], bool]
     _emit_finding: EmitFinding
     _emit_artifact: EmitArtifact
+    _emit_activity: ActivityCallback | None = None
+    activity_parent_id: str | None = None
+    activity_metrics: dict[str, Any] | None = None
 
     async def emit_finding(self, f: Finding) -> None:
+        if self.activity_metrics is not None:
+            self.activity_metrics.setdefault("verdicts", []).append(f.verdict.value)
+        if self._emit_activity is not None:
+            await self._emit_activity({
+                "kind": "finding",
+                "parent_id": self.activity_parent_id,
+                "phase": "resolved",
+                "status": "finished",
+                "outcome": f.verdict.value.casefold(),
+                "source": f.source,
+                "category": f.category,
+                "label": f.label,
+                "url": safe_display_url(f.url or ""),
+                "verdict": f.verdict.value,
+                "confidence": f.confidence,
+                "reason": redact(f.reasons[0]) if f.reasons else "",
+            })
         await self._emit_finding(f)
 
-    async def emit_artifact(self, a: Artifact) -> None:
-        await self._emit_artifact(a)
+    async def emit_artifact(self, a: Artifact) -> bool:
+        admitted = await self._emit_artifact(a)
+        if admitted is False:
+            return False
+        if self.activity_metrics is not None:
+            self.activity_metrics["artifacts"] = self.activity_metrics.get("artifacts", 0) + 1
+        if self._emit_activity is not None:
+            await self._emit_activity({
+                "kind": "artifact",
+                "id": artifact_activity_id(a.key),
+                "parent_id": self.activity_parent_id,
+                "phase": "discovered",
+                "status": "finished",
+                "outcome": "success",
+                "artifact_type": a.type.value,
+                "label": a.value,
+                "module": a.source_module,
+                "confidence": a.confidence,
+                "depth": a.depth,
+                "in_scope": self.in_scope(a),
+            })
+        return True
+
+    def for_dispatch(self, process_id: str) -> "ModuleContext":
+        """Create an activity-isolated context for one module dispatch."""
+        return ModuleContext(
+            client=self.client,
+            query=self.query,
+            settings=self.settings,
+            in_scope=self.in_scope,
+            _emit_finding=self._emit_finding,
+            _emit_artifact=self._emit_artifact,
+            _emit_activity=self._emit_activity,
+            activity_parent_id=process_id,
+            activity_metrics={"verdicts": [], "artifacts": 0},
+        )
 
     def child(self, _emit_finding: EmitFinding, _emit_artifact: EmitArtifact) -> "ModuleContext":
         """A ctx with the same wiring but redirected emitters (used to capture
@@ -65,14 +121,19 @@ class Module:
     passive: bool = True           # active modules touch the target more directly
     use_cache: bool = True
     enabled: bool = True
+    expansion: bool = False
 
     @property
     def kind_label(self) -> str:
         """A stable 'kind' for the Source/breaker row (first consumed type)."""
         return next((t.value for t in sorted(self.consumes, key=lambda x: x.value)), "module")
 
-    def accepts(self, art: Artifact) -> bool:
-        return self.enabled and art.type in self.consumes
+    def accepts(self, art: Artifact, *, expansion_enabled: bool = False) -> bool:
+        return (
+            self.enabled
+            and (not self.expansion or expansion_enabled)
+            and art.type in self.consumes
+        )
 
     async def run_resilient(self, art: Artifact, ctx: ModuleContext) -> None:
         """Run with cache + breaker + reliability; never raises. A failing
@@ -114,19 +175,22 @@ class Module:
             buf_f.append(f)
             await ctx.emit_finding(f)
 
-        async def capture_artifact(a: Artifact) -> None:
+        async def capture_artifact(a: Artifact) -> bool:
             buf_a.append(a)
-            await ctx.emit_artifact(a)
+            return await ctx.emit_artifact(a)
 
         cctx = ctx.child(capture_finding, capture_artifact)
         try:
             await self.run(art, cctx)
+        except RequestBudgetExceeded:
+            raise
         except Exception as e:  # noqa: BLE001 - isolate module failures
+            error = redact(str(e))
             await asyncio.to_thread(cache.record_failure, self.name, self.kind_label,
-                                    self.reliability_prior, str(e))
+                                    self.reliability_prior, error)
             await ctx.emit_finding(Finding(
                 source=self.name, category=self.kind_label, label=self.name,
-                verdict=Verdict.ERROR, reasons=[f"module failed: {e}"],
+                verdict=Verdict.ERROR, reasons=[f"module failed: {error}"],
             ))
             return
 

@@ -1,5 +1,5 @@
 {
-  "license": "Detection schema modeled on the WhatsMyName project (wmn-data.json, CC BY 4.0). This is a small curated seed; refresh with scripts/refresh_sites.py.",
+  "license": "Detection schema modeled on the WhatsMyName project (wmn-data.json, CC BY 4.0). This is a small curated seed; fetch the full dataset with scripts/fetch_wmn.py.",
   "sites": [
     {
       "name": "GitHub",

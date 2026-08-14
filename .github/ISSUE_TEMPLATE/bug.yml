@@ -1,0 +1,55 @@
+name: Bug report
+description: Report reproducible incorrect behavior without sensitive data.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not post credentials, personal identifiers, reports, databases, or live investigation evidence.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release version, container digest, or commit SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Local CLI or dashboard
+        - Production Compose
+        - Python package
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Use synthetic or redacted examples only.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include safe commands, configuration names, and sanitized logs.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Data safety
+      options:
+        - label: I removed credentials, personal data, reports, databases, and canary identities.
+          required: true
+        - label: This is not a security vulnerability requiring private disclosure.
+          required: true

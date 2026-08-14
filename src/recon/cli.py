@@ -1,9 +1,11 @@
 """Command-line entry point.
 
-  recon scan --username torvalds [--email x@y.com] [--format json] [--watch "0 */6 * * *"]
+  recon scan torvalds [--format json] [--watch "0 */6 * * *"]
   recon serve            # local web dashboard + API
   recon worker           # process queued scan jobs (run N of these to scale)
   recon monitor          # run the cron scheduler for watch-listed targets
+  recon review           # record an investigator decision
+  recon maturity         # check whether high-risk expansion is unblocked
   recon targets|runs|changes|sources   # inspect stored investigation data
 
 Back-compat: `recon --username x` (no subcommand) defaults to `scan`.
@@ -13,9 +15,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import os
+import re
 import sys
+import tempfile
+from pathlib import Path
 
-from .models import Finding, Query, Verdict
+from .models import Finding, Verdict
 
 _COLORS = {
     Verdict.FOUND: "\033[92m", Verdict.UNCERTAIN: "\033[93m",
@@ -23,13 +30,20 @@ _COLORS = {
     Verdict.NOT_FOUND: "\033[90m", Verdict.ERROR: "\033[91m",
 }
 _RESET = "\033[0m"
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _terminal_text(value: object) -> str:
+    return _CONTROL_RE.sub("", str(value)).replace("\x1b", "")
 
 
 def _line(f: Finding) -> str:
     c = _COLORS.get(f.verdict, "")
-    why = f"  ({f.reasons[0]})" if f.reasons else ""
-    url = f"  {f.url}" if f.url else ""
-    return f"{c}{f.verdict.value:<10}{_RESET} {f.confidence:>4.2f}  {f.source:<26} {f.label}{url}{why}"
+    why = f"  ({_terminal_text(f.reasons[0])})" if f.reasons else ""
+    url = f"  {_terminal_text(f.url)}" if f.url else ""
+    source = _terminal_text(f.source)
+    label = _terminal_text(f.label)
+    return f"{c}{f.verdict.value:<10}{_RESET} {f.confidence:>4.2f}  {source:<26} {label}{url}{why}"
 
 
 def _add_identifier_args(p: argparse.ArgumentParser) -> None:
@@ -38,6 +52,8 @@ def _add_identifier_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--phone")
     p.add_argument("--domain")
     p.add_argument("--name")
+    p.add_argument("--url")
+    p.add_argument("--ip", dest="ip_address")
 
 
 # --- scan ------------------------------------------------------------------
@@ -48,11 +64,22 @@ async def _cmd_scan(args) -> int:
     from .orchestrator import scan
     from .config import SETTINGS
     from . import reporting
+    from .identifiers import resolve_query
 
-    query = Query(username=args.username, email=args.email, phone=args.phone,
-                  domain=args.domain, name=args.name)
-    if query.normalized().is_empty():
-        print("provide at least one identifier", file=sys.stderr)
+    try:
+        query, intake = resolve_query(
+            args.subject,
+            hint=args.subject_type,
+            username=args.username,
+            email=args.email,
+            phone=args.phone,
+            domain=args.domain,
+            name=args.name,
+            url=args.url,
+            ip_address=args.ip_address,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
 
     overrides: dict = {}
@@ -67,7 +94,19 @@ async def _cmd_scan(args) -> int:
     settings = dataclasses.replace(SETTINGS, **overrides) if overrides else SETTINGS
 
     watch = bool(args.watch)
-    result = await scan(query, label=args.label, watchlist=watch, settings=settings)
+    result = await scan(
+        query,
+        label=args.label,
+        watchlist=watch,
+        settings=settings,
+        intake=intake,
+    )
+
+    print(
+        f"Interpreted input as {intake['kind']}: {intake['normalized']} "
+        f"({intake['confidence']:.0%} classifier confidence)",
+        file=sys.stderr,
+    )
 
     findings = result["findings"]
     for f in findings:
@@ -81,6 +120,13 @@ async def _cmd_scan(args) -> int:
                 print(f"           = {bd.total:.2f}", file=sys.stderr)
 
     summary = result["summary"]
+    profile = summary.get("profile") or {}
+    if profile:
+        print(
+            f"\nProfile: {profile['status']} — {profile['assessment']} "
+            f"({profile['confidence']:.0%} evidence confidence)",
+            file=sys.stderr,
+        )
     if summary.get("clusters"):
         print("\nIdentities (correlated):", file=sys.stderr)
         for c in summary["clusters"]:
@@ -106,6 +152,18 @@ async def _cmd_scan(args) -> int:
         for h in insights:
             print(f"  [{h.severity:<6}] {h.title}"
                   f"{(' — ' + h.key) if h.key not in ('*', '') else ''}", file=sys.stderr)
+
+    reasoning = result.get("reasoning") or {}
+    actions = reasoning.get("next_actions") or []
+    if reasoning:
+        print(f"\nNext objective: {reasoning.get('objective', 'Review evidence')}", file=sys.stderr)
+        print(f"  {reasoning.get('assessment', '')}", file=sys.stderr)
+        for action in actions[:5]:
+            print(
+                f"  [{action['priority']:<8}] {action['title']} "
+                f"({action['execution']}) — {action['rationale']}",
+                file=sys.stderr,
+            )
 
     stop = f"  (stopped: {result['stop_reason']})" if result.get("stop_reason") else ""
     print(f"\nrun #{result['run_id']} — {sum(1 for f in findings if f.is_hit)} hit(s) "
@@ -266,10 +324,21 @@ async def _cmd_calibrate(args) -> int:
     from .calibrate import independence_impact, run_calibration
     from .store import get_db, repo
 
-    report = await run_calibration(n_bins=args.bins)
+    from .calibrate.labels import labels_file, load_labels
+    from .provenance import sha256_file
+
+    path = labels_file(args.labels)
+    labels = load_labels(path)
+    report = await run_calibration(labels=labels, n_bins=args.bins)
+    report["label_provenance"] = {
+        "source": "packaged_fixture" if args.labels is None and not os.environ.get(
+            "RECON_CALIBRATION_FILE"
+        ) else "external",
+        "sha256": sha256_file(path) if path.is_file() else None,
+    }
     if report["n"] == 0:
-        print("no calibration samples — add labels in data/calibration_labels.json "
-              "(or RECON_CALIBRATION_FILE), and ensure the sites are reachable.",
+        print("no calibration samples — set RECON_CALIBRATION_FILE to a label "
+              "dataset and ensure the sites are reachable.",
               file=sys.stderr)
         return 0
 
@@ -297,6 +366,9 @@ async def _cmd_calibrate(args) -> int:
     with db.session() as s:
         row = repo.save_calibration(s, report)
     print(f"  saved calibration #{row.id}", file=sys.stderr)
+    if args.require_adequate and not report.get("sample_quality", {}).get("adequate"):
+        print("calibration dataset does not meet the minimum quality gate", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -328,13 +400,372 @@ def _cmd_analytics(args) -> int:
     return 0
 
 
+# --- review / governance --------------------------------------------------
+
+def _cmd_review(args) -> int:
+    from .governance import review_observation
+    from .store import get_db
+
+    try:
+        with get_db().session() as session:
+            review = review_observation(
+                session,
+                args.observation,
+                args.decision,
+                note=args.note or "",
+                reviewer=args.reviewer,
+            )
+        print(f"review #{review.id}: observation {review.observation_id} -> {review.decision}")
+        return 0
+    except LookupError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+def _atomic_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _cmd_export_target(args) -> int:
+    from .governance import add_audit_event, target_export
+    from .store import get_db
+
+    redacted = not args.include_sensitive
+    try:
+        with get_db().session() as session:
+            payload = target_export(session, args.target, redacted=redacted)
+            add_audit_event(
+                session,
+                "target.exported",
+                "target",
+                args.target,
+                detail={"redacted": redacted, "encrypted": args.encrypt},
+            )
+    except LookupError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    raw = (json.dumps(payload, indent=2, default=str) + "\n").encode("utf-8")
+    suffix = ".orx" if args.encrypt else ".json"
+    path = Path(args.out or f"reports/target-{args.target}{'-redacted' if redacted else ''}{suffix}")
+    if args.encrypt:
+        from .crypto import encrypt
+
+        passphrase = os.environ.get("RECON_EXPORT_PASSPHRASE")
+        if not passphrase:
+            print("set RECON_EXPORT_PASSPHRASE for encrypted exports", file=sys.stderr)
+            return 2
+        raw = encrypt(raw, passphrase)
+    _atomic_bytes(path, raw)
+    print(f"target export written: {path}")
+    return 0
+
+
+def _cmd_decrypt_export(args) -> int:
+    from .crypto import decrypt
+
+    passphrase = os.environ.get("RECON_EXPORT_PASSPHRASE")
+    if not passphrase:
+        print("set RECON_EXPORT_PASSPHRASE to decrypt exports", file=sys.stderr)
+        return 2
+    source, destination = Path(args.input), Path(args.out)
+    try:
+        plaintext = decrypt(source.read_bytes(), passphrase)
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"decrypt failed: {exc}", file=sys.stderr)
+        return 1
+    _atomic_bytes(destination, plaintext)
+    print(f"decrypted export written: {destination}")
+    return 0
+
+
+def _cmd_retention(args) -> int:
+    from .governance import apply_retention
+    from .store import get_db
+
+    with get_db().session() as session:
+        result = apply_retention(
+            session,
+            args.days,
+            dry_run=not args.apply,
+            actor=args.actor,
+        )
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def _cmd_purge(args) -> int:
+    from .governance import purge_target
+    from .store import get_db
+
+    if not args.confirm:
+        print("refusing to purge without --confirm", file=sys.stderr)
+        return 2
+    try:
+        with get_db().session() as session:
+            deleted = purge_target(session, args.target, actor=args.actor)
+    except LookupError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(json.dumps({"target_id": args.target, "deleted": deleted}, indent=2))
+    return 0
+
+
+def _cmd_review_labels(args) -> int:
+    from .governance import reviewed_calibration_labels
+    from .store import get_db
+
+    with get_db().session() as session:
+        labels = reviewed_calibration_labels(session)
+    path = Path(args.out)
+    _atomic_bytes(path, (json.dumps({"labels": labels}, indent=2) + "\n").encode())
+    print(f"wrote {len(labels)} reviewed label(s): {path}")
+    return 0
+
+
+async def _cmd_source_check(args) -> int:
+    from .sources import load_canaries, run_canaries, validate_contracts
+
+    errors = validate_contracts()
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return 1
+    try:
+        results = await run_canaries(load_canaries(args.config))
+    except (OSError, ValueError) as exc:
+        print(f"invalid canary configuration: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps({"results": results}, indent=2))
+    failing = {"failed", "error"} | ({"skipped"} if args.fail_on_skip else set())
+    return 1 if any(result["status"] in failing for result in results) else 0
+
+
+def _cmd_maturity(args) -> int:
+    from .maturity import assess
+    from .store import get_db
+
+    result = assess(get_db())
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        for check in result["checks"]:
+            status = "PASS" if check["passed"] else "BLOCK"
+            print(f"{status:<5} {check['name']}: {check['detail']}")
+        print("READY" if result["expansion_ready"] else "NOT READY")
+    return 0 if result["expansion_ready"] else 1
+
+
+def _cmd_db_upgrade(_args) -> int:
+    from .store.db import init_db
+
+    db = init_db()
+    print(f"database upgraded to {db.schema_revision()}")
+    return 0
+
+
+def _cmd_db_check(_args) -> int:
+    from .store.db import Database, _default_dsn
+
+    with Database(_default_dsn()) as db:
+        db.ping()
+        current = db.schema_revision()
+        head = db.migration_head()
+    print(f"database current={current or 'none'} head={head}")
+    return 0 if current == head else 1
+
+
+def _validate_background_mode() -> None:
+    from .config import SETTINGS
+    from .store import get_db
+
+    db = get_db()
+    if not SETTINGS.production_mode:
+        return
+    if SETTINGS.auto_migrate:
+        raise RuntimeError("production background services require RECON_AUTO_MIGRATE=0")
+    if db.engine.dialect.name != "postgresql":
+        raise RuntimeError("production background services require PostgreSQL")
+    if SETTINGS.queue_backend != "arq":
+        raise RuntimeError("production background services require RECON_QUEUE_BACKEND=arq")
+    from .expansion import require_ready
+
+    require_ready(db, "multi_user")
+
+
+def _account_password(confirm: bool = False) -> str:
+    from .config import env_value
+
+    password = env_value("RECON_USER_PASSWORD")
+    if password is not None:
+        return password
+    if not sys.stdin.isatty():
+        raise ValueError(
+            "set RECON_USER_PASSWORD or RECON_USER_PASSWORD_FILE when stdin is not interactive"
+        )
+    import getpass
+    password = getpass.getpass("Password: ")
+    if confirm and password != getpass.getpass("Confirm password: "):
+        raise ValueError("passwords do not match")
+    return password
+
+
+def _cmd_user_add(args) -> int:
+    from .auth import create_user
+    from .store import get_db
+
+    try:
+        password = _account_password(confirm=True)
+        with get_db().session() as session:
+            user = create_user(
+                session, args.username, password, role=args.role,
+                display_name=args.display_name or "",
+            )
+        print(f"created {user.role} account: {user.username}")
+        return 0
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def _cmd_user_list(_args) -> int:
+    from .auth import list_users
+    from .store import get_db
+
+    with get_db().session() as session:
+        users = list_users(session)
+    for user in users:
+        state = "active" if user.active else "disabled"
+        print(f"{user.username:<24} {user.role:<9} {state}")
+    return 0
+
+
+def _cmd_user_update(args) -> int:
+    from .auth import ROLES, active_admin_count, get_user, set_password
+    from .store import get_db
+
+    try:
+        with get_db().session() as session:
+            user = get_user(session, args.username)
+            if user is None:
+                raise ValueError(f"user {args.username!r} not found")
+            removing_admin = user.role == "admin" and (
+                args.role not in {None, "admin"} or args.disable
+            )
+            if removing_admin and active_admin_count(session) <= 1:
+                raise ValueError("cannot disable or demote the last active administrator")
+            if args.role:
+                if args.role not in ROLES:
+                    raise ValueError("invalid role")
+                user.role = args.role
+            if args.enable:
+                user.active = True
+            if args.disable:
+                user.active = False
+            if args.reset_password:
+                set_password(session, user, _account_password(confirm=True))
+            user_id, username, role, active = user.id, user.username, user.role, user.active
+        print(f"updated user #{user_id}: {username} ({role}, {'active' if active else 'disabled'})")
+        return 0
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def _cmd_pair_review(args) -> int:
+    from .ml_identity import review_pair
+    from .store import get_db
+
+    try:
+        with get_db().session() as session:
+            row = review_pair(
+                session,
+                args.left,
+                args.right,
+                args.decision == "same",
+                reviewer=args.reviewer,
+                verification_method=args.method,
+                note=args.note or "",
+            )
+        print(f"pair review #{row.id}: {row.left_observation_id}/{row.right_observation_id} "
+              f"-> {'same' if row.same_identity else 'distinct'}")
+        return 0
+    except (LookupError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def _cmd_ml_train(args) -> int:
+    from .expansion import ExpansionBlocked, require_ready
+    from .ml_identity import train
+    from .store import get_db
+
+    db = get_db()
+    try:
+        require_ready(db, "ml_identity")
+        with db.session() as session:
+            result = train(session, args.out)
+        print(json.dumps(result, indent=2))
+        return 0 if result["activation_eligible"] else 1
+    except (ExpansionBlocked, RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def _cmd_ml_status(args) -> int:
+    from .ml_identity import load_model
+
+    try:
+        model = load_model(args.model)
+        print(json.dumps(model.payload, indent=2))
+        return 0
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def _cmd_source_pack(args) -> int:
+    from .source_pack import install
+
+    try:
+        result = install(args.input, args.out)
+        print(json.dumps(result, indent=2))
+        print(f"enable after maturity passes with RECON_SITES_FILE={result['path']} "
+              "and RECON_ENABLE_EXPANSION=1", file=sys.stderr)
+        return 0
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
 # --- main ------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="recon", description="Professional-grade OSINT framework.")
+    p = argparse.ArgumentParser(
+        prog="recon", description="Local-first OSINT research framework."
+    )
     sub = p.add_subparsers(dest="cmd")
 
     sc = sub.add_parser("scan", help="run a durable, correlated, persisted scan")
+    sc.add_argument(
+        "subject",
+        nargs="?",
+        help="one username, email, phone, domain, name, public URL, or IP address",
+    )
+    sc.add_argument(
+        "--type",
+        dest="subject_type",
+        choices=["username", "email", "phone", "domain", "name", "url", "ip_address"],
+        help="override automatic classification of the starting value",
+    )
     _add_identifier_args(sc)
     sc.add_argument("--label")
     sc.add_argument("--all", action="store_true", help="also print NOT_FOUND/ERROR")
@@ -368,10 +799,87 @@ def build_parser() -> argparse.ArgumentParser:
     cal = sub.add_parser("calibrate",
                          help="measure whether the confidence score is calibrated (vs labels)")
     cal.add_argument("--bins", type=int, default=10, help="reliability-diagram bins")
+    cal.add_argument("--labels", help="validated external ground-truth JSON file")
+    cal.add_argument("--require-adequate", action="store_true",
+                     help="exit nonzero unless sample size and class balance meet the gate")
 
     sub.add_parser("analytics", help="confidence analytics across all stored observations")
 
-    sub.add_parser("serve", help="launch the local web dashboard + API")
+    review = sub.add_parser("review", help="record an investigator decision")
+    review.add_argument("--observation", type=int, required=True)
+    review.add_argument("--decision", choices=["accepted", "rejected", "unresolved"], required=True)
+    review.add_argument("--note")
+    review.add_argument("--reviewer", default="local")
+
+    export = sub.add_parser("export-target", help="export one target (redacted by default)")
+    export.add_argument("--target", type=int, required=True)
+    export.add_argument("--out")
+    export.add_argument("--include-sensitive", action="store_true")
+    export.add_argument("--encrypt", action="store_true")
+
+    decrypt = sub.add_parser("decrypt-export", help="decrypt an encrypted target export")
+    decrypt.add_argument("--input", required=True)
+    decrypt.add_argument("--out", required=True)
+
+    retention = sub.add_parser("retention", help="preview or apply subject retention")
+    retention.add_argument("--days", type=int, required=True)
+    retention.add_argument("--apply", action="store_true")
+    retention.add_argument("--actor", default="local")
+
+    purge = sub.add_parser("purge-target", help="delete a target and dependent investigation data")
+    purge.add_argument("--target", type=int, required=True)
+    purge.add_argument("--confirm", action="store_true")
+    purge.add_argument("--actor", default="local")
+
+    labels = sub.add_parser("review-labels", help="export reviewed username labels")
+    labels.add_argument("--out", required=True)
+
+    source_check = sub.add_parser("source-check", help="run designated live source canaries")
+    source_check.add_argument("--config", required=True)
+    source_check.add_argument("--fail-on-skip", action="store_true")
+
+    maturity = sub.add_parser("maturity", help="check the gate before high-risk expansion")
+    maturity.add_argument("--json", action="store_true")
+    sub.add_parser("db-upgrade", help="upgrade the database to the packaged schema head")
+    sub.add_parser("db-check", help="verify database connectivity and schema revision")
+
+    serve = sub.add_parser("serve", help="launch the web dashboard + API")
+    serve.add_argument("--remote", action="store_true", help="authenticated TLS remote mode")
+    serve.add_argument("--host")
+    serve.add_argument("--port", type=int)
+    serve.add_argument("--tls-cert")
+    serve.add_argument("--tls-key")
+    serve.add_argument("--allowed-hosts", help="comma-separated trusted hostnames")
+
+    user_add = sub.add_parser("user-add", help="create a dashboard account")
+    user_add.add_argument("username")
+    user_add.add_argument("--role", choices=["admin", "analyst", "reviewer"], default="analyst")
+    user_add.add_argument("--display-name")
+    sub.add_parser("user-list", help="list dashboard accounts")
+    user_update = sub.add_parser("user-update", help="change a dashboard account")
+    user_update.add_argument("username")
+    user_update.add_argument("--role", choices=["admin", "analyst", "reviewer"])
+    state = user_update.add_mutually_exclusive_group()
+    state.add_argument("--enable", action="store_true")
+    state.add_argument("--disable", action="store_true")
+    user_update.add_argument("--reset-password", action="store_true")
+
+    pair = sub.add_parser("pair-review", help="label an observation pair for ML training")
+    pair.add_argument("--left", type=int, required=True)
+    pair.add_argument("--right", type=int, required=True)
+    pair.add_argument("--decision", choices=["same", "distinct"], required=True)
+    pair.add_argument("--method", required=True, help="independent verification method")
+    pair.add_argument("--reviewer", default="local")
+    pair.add_argument("--note")
+
+    ml_train = sub.add_parser("ml-train", help="train an explainable pair-review model")
+    ml_train.add_argument("--out", required=True)
+    ml_status = sub.add_parser("ml-status", help="inspect and validate an identity model")
+    ml_status.add_argument("--model", required=True)
+
+    source_pack = sub.add_parser("source-pack", help="validate and install a source pack")
+    source_pack.add_argument("--input", required=True)
+    source_pack.add_argument("--out", required=True)
     wk = sub.add_parser("worker", help="process queued scan jobs")
     wk.add_argument("--once", action="store_true", help="drain the queue then exit")
     sub.add_parser("monitor", help="run the cron scheduler for watch-listed targets")
@@ -408,26 +916,93 @@ def main() -> None:
         raise SystemExit(asyncio.run(_cmd_calibrate(args)))
     if cmd == "analytics":
         raise SystemExit(_cmd_analytics(args))
+    if cmd == "review":
+        raise SystemExit(_cmd_review(args))
+    if cmd == "export-target":
+        raise SystemExit(_cmd_export_target(args))
+    if cmd == "decrypt-export":
+        raise SystemExit(_cmd_decrypt_export(args))
+    if cmd == "retention":
+        raise SystemExit(_cmd_retention(args))
+    if cmd == "purge-target":
+        raise SystemExit(_cmd_purge(args))
+    if cmd == "review-labels":
+        raise SystemExit(_cmd_review_labels(args))
+    if cmd == "source-check":
+        raise SystemExit(asyncio.run(_cmd_source_check(args)))
+    if cmd == "maturity":
+        raise SystemExit(_cmd_maturity(args))
+    if cmd == "db-upgrade":
+        raise SystemExit(_cmd_db_upgrade(args))
+    if cmd == "db-check":
+        raise SystemExit(_cmd_db_check(args))
+    if cmd == "user-add":
+        raise SystemExit(_cmd_user_add(args))
+    if cmd == "user-list":
+        raise SystemExit(_cmd_user_list(args))
+    if cmd == "user-update":
+        raise SystemExit(_cmd_user_update(args))
+    if cmd == "pair-review":
+        raise SystemExit(_cmd_pair_review(args))
+    if cmd == "ml-train":
+        raise SystemExit(_cmd_ml_train(args))
+    if cmd == "ml-status":
+        raise SystemExit(_cmd_ml_status(args))
+    if cmd == "source-pack":
+        raise SystemExit(_cmd_source_pack(args))
     if cmd == "serve":
+        if args.remote:
+            os.environ["RECON_REMOTE_MODE"] = "1"
+            os.environ["RECON_AUTH_REQUIRED"] = "1"
+            os.environ["RECON_ENABLE_EXPANSION"] = "1"
+        for name, value in (
+            ("RECON_HOST", args.host), ("RECON_PORT", args.port),
+            ("RECON_TLS_CERT", args.tls_cert), ("RECON_TLS_KEY", args.tls_key),
+            ("RECON_ALLOWED_HOSTS", args.allowed_hosts),
+        ):
+            if value is not None:
+                os.environ[name] = str(value)
         from .server import main as serve_main
         serve_main()
         return
     if cmd == "worker":
+        _validate_background_mode()
+        from .config import SETTINGS
+
+        if SETTINGS.queue_backend == "arq":
+            try:
+                from arq.worker import run_worker as run_arq_worker
+                from .jobs.arq_queue import WorkerSettings
+            except ImportError as exc:
+                raise SystemExit(
+                    "ARQ worker requires: pip install -e '.[distributed]'"
+                ) from exc
+            run_arq_worker(WorkerSettings, burst=getattr(args, "once", False))
+            return
         from .jobs.worker import run_worker
         n = asyncio.run(run_worker(once=getattr(args, "once", False)))
         print(f"processed {n} job(s)", file=sys.stderr)
         return
     if cmd == "monitor":
+        _validate_background_mode()
         from .monitor.scheduler import MonitorScheduler
-        sched = MonitorScheduler()
-        loaded = sched.load()
-        print(f"scheduler running with {loaded} schedule(s); Ctrl-C to stop", file=sys.stderr)
-        loop = asyncio.new_event_loop()
-        sched.sched.start()
+
+        async def run_monitor() -> None:
+            sched = MonitorScheduler()
+            loaded = sched.start()
+            print(
+                f"scheduler running with {loaded} schedule(s); Ctrl-C to stop",
+                file=sys.stderr,
+            )
+            try:
+                await asyncio.Event().wait()
+            finally:
+                sched.shutdown()
+
         try:
-            loop.run_forever()
+            asyncio.run(run_monitor())
         except KeyboardInterrupt:
-            sched.shutdown()
+            pass
         return
     if cmd in ("targets", "runs", "changes", "sources"):
         args.what = cmd

@@ -43,4 +43,5 @@ MODULE = Module(
     produces=set(),
     run=_run,
     reliability_prior=0.70,
+    enabled=False,  # free endpoint is HTTP-only; retained for compatibility, not dispatched
 )

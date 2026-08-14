@@ -1,5 +1,5 @@
 {
-  "_comment": "Ground-truth (account, site, present) labels for `recon calibrate`. Site names must match data/sites.json. Extend via RECON_CALIBRATION_FILE. Keep this honest: only label outcomes you have actually confirmed.",
+  "_comment": "Small calibration fixture, not a statistically sufficient benchmark. Site names must match the packaged sites.json. Extend with independently verified labels via RECON_CALIBRATION_FILE.",
   "labels": [
     {"category": "username", "account": "torvalds", "site": "GitHub", "present": true},
     {"category": "username", "account": "torvalds", "site": "Keybase", "present": true},

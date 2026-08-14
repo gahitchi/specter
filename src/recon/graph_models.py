@@ -59,6 +59,8 @@ _NORMALIZERS = {
     ArtifactType.LINK: normalize.norm_url,
     ArtifactType.ACCOUNT_PROFILE: normalize.norm_url,
     ArtifactType.NAME: normalize.norm_text,
+    ArtifactType.PHONE: normalize.norm_phone,
+    ArtifactType.IP_ADDRESS: normalize.norm_ip,
 }
 
 

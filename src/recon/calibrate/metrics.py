@@ -115,10 +115,13 @@ def suggest_threshold(samples: list[Sample], current: float,
 
 def summary(samples: list[Sample], found_threshold: float,
             uncertain_threshold: float, n_bins: int = 10) -> dict:
-    return {
+    positives = sum(1 for s in samples if s.present)
+    negatives = len(samples) - positives
+    adequate = len(samples) >= 100 and positives >= 20 and negatives >= 20
+    report = {
         "n": len(samples),
-        "positives": sum(1 for s in samples if s.present),
-        "negatives": sum(1 for s in samples if not s.present),
+        "positives": positives,
+        "negatives": negatives,
         "brier": brier(samples),
         "ece": ece(samples, n_bins),
         "mce": mce(samples, n_bins),
@@ -126,4 +129,14 @@ def summary(samples: list[Sample], found_threshold: float,
         "confusion_found": confusion_at(samples, found_threshold),
         "confusion_uncertain": confusion_at(samples, uncertain_threshold),
         "suggestion": suggest_threshold(samples, found_threshold),
+        "sample_quality": {
+            "adequate": adequate,
+            "minimum": {"total": 100, "positives": 20, "negatives": 20},
+            "warning": None if adequate else (
+                "sample is too small or imbalanced to validate calibration or tune thresholds"
+            ),
+        },
     }
+    if not adequate:
+        report["suggestion"]["advisory_only"] = True
+    return report

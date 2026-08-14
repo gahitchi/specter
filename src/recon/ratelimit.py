@@ -10,10 +10,10 @@ the in-process limiter.
 from __future__ import annotations
 
 import os
-import time
+import math
 from typing import Optional, Protocol
 
-from .config import SETTINGS
+from .config import SETTINGS, Settings
 
 
 class Limiter(Protocol):
@@ -21,7 +21,7 @@ class Limiter(Protocol):
 
 
 class RedisHostLimiter:
-    """Cross-process minimum-interval per host using a Redis key + Lua CAS.
+    """Cross-process minimum-interval per host using an atomic Redis lease.
 
     Best-effort politeness: each host may be hit at most once per
     `per_host_min_interval` across all workers sharing the same Redis.
@@ -38,23 +38,25 @@ class RedisHostLimiter:
         import asyncio
 
         key = f"recon:rl:{host}"
+        ttl_ms = max(1, math.ceil(self._min * 1000))
         while True:
-            now = time.time()
-            # Set next-allowed slot if absent or already passed.
-            allowed = await self._r.get(key)
-            allowed = float(allowed) if allowed else 0.0
-            if now >= allowed:
-                await self._r.set(key, now + self._min)
+            if await self._r.set(key, "1", nx=True, px=ttl_ms):
                 return
-            await asyncio.sleep(allowed - now)
+            remaining_ms = await self._r.pttl(key)
+            await asyncio.sleep(max(1, remaining_ms) / 1000)
+
+    async def aclose(self) -> None:
+        await self._r.aclose()
 
 
-def get_limiter() -> Optional[Limiter]:
+def get_limiter(settings: Settings = SETTINGS) -> Optional[Limiter]:
     """Return a cross-process limiter if the distributed backend is configured,
     else None (the in-process limiter in http_client is used)."""
-    if SETTINGS.queue_backend == "arq":
+    if settings.queue_backend == "arq":
         try:
-            return RedisHostLimiter()
-        except Exception:
-            return None
+            return RedisHostLimiter(min_interval=settings.per_host_min_interval)
+        except ImportError as exc:
+            raise RuntimeError(
+                "distributed rate limiting requires the 'distributed' extra"
+            ) from exc
     return None

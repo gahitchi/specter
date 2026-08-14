@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+.uv-cache
+.pip-audit-cache
+.pytest_cache
+.coverage
+build
+dist
+data
+reports
+deploy/secrets/*
+!deploy/secrets/*.example
+*.db
+*.db-wal
+*.db-shm
+*.log

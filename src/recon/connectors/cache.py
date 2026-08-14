@@ -32,7 +32,7 @@ def _aware(d: dt.datetime | None) -> dt.datetime | None:
 def cache_key(connector: str, query: Query) -> str:
     relevant = query.normalized().model_dump(exclude_none=True)
     blob = json.dumps(relevant, sort_keys=True)
-    digest = hashlib.sha1(blob.encode()).hexdigest()[:24]
+    digest = hashlib.sha256(blob.encode()).hexdigest()[:24]
     return f"{connector}:{digest}"
 
 

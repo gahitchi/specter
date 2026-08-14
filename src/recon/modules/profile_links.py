@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import re
 
-from ..config import SETTINGS
 from ..graph_models import Artifact, ArtifactType
 from ..models import Finding, Verdict
 from .base import Module, ModuleContext
@@ -40,7 +39,7 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
         return
     if resp.status_code != 200:
         return
-    body = resp.text[: SETTINGS.max_body_bytes]
+    body = resp.text[: ctx.settings.max_body_bytes]
 
     emails = sorted({e.lower() for e in _EMAIL_RE.findall(body)})[:10]
     hrefs = _HREF_RE.findall(body)

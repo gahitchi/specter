@@ -14,7 +14,7 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
     key = VAULT.get("abuseipdb")
     if not key:
         return
-    resp = await ctx.client._client.get(
+    resp = await ctx.client.fetch(
         "https://api.abuseipdb.com/api/v2/check",
         params={"ipAddress": art.normalized, "maxAgeInDays": "90"},
         headers={"Key": key, "Accept": "application/json"})

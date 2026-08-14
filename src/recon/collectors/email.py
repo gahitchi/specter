@@ -14,14 +14,19 @@ from typing import Awaitable, Callable
 
 import dns.resolver
 
-from ..http_client import RateLimitedClient
+from ..http_client import RateLimitedClient, RequestBudgetExceeded
+from ..keys import redact
 from ..models import Finding, Query, Verdict
 
 EmitFn = Callable[[Finding], Awaitable[None]]
 
 
 def gravatar_hash(email: str) -> str:
-    return hashlib.md5(email.strip().lower().encode("utf-8")).hexdigest()
+    # Gravatar's public protocol requires MD5; this is an identifier, not a
+    # cryptographic integrity primitive.
+    return hashlib.md5(
+        email.strip().lower().encode("utf-8"), usedforsecurity=False
+    ).hexdigest()
 
 
 async def _mx(domain: str) -> list[str]:
@@ -59,10 +64,13 @@ async def collect(query: Query, client: RateLimitedClient, emit: EmitFn) -> None
                 url=None, verdict=Verdict.NOT_FOUND, confidence=0.0,
                 reasons=[f"no gravatar (status {resp.status_code})"],
             ))
+    except RequestBudgetExceeded:
+        raise
     except Exception as e:  # noqa: BLE001
         await emit(Finding(
             source="email:gravatar", category="email", label="Gravatar",
-            url=None, verdict=Verdict.ERROR, reasons=[f"request failed: {e}"],
+            url=None, verdict=Verdict.ERROR,
+            reasons=[f"request failed: {redact(str(e))}"],
         ))
 
     # --- MX / deliverability context ---

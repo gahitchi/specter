@@ -18,11 +18,9 @@ import sys
 import time
 import urllib.request
 import webbrowser
-from pathlib import Path
 
 from .config import SETTINGS
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BANNER = r"""
    ____                 _
   / ___| _ __  ___  ___| |_ ___ _ __
@@ -43,7 +41,8 @@ def _wait_healthy(url: str, timeout: float = 25.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=2) as r:
+            # The caller constructs this URL from the fixed loopback host.
+            with urllib.request.urlopen(url, timeout=2) as r:  # nosec B310
                 if r.status == 200:
                     return True
         except Exception:
@@ -57,18 +56,18 @@ def open_firefox(url: str) -> None:
     if firefox:
         try:
             subprocess.Popen([firefox, "--new-tab", url],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # nosec B603
             return
-        except Exception:
+        except OSError:
             pass
     try:
         webbrowser.get("firefox").open_new_tab(url)
-    except Exception:
+    except webbrowser.Error:
         webbrowser.open_new_tab(url)
 
 
 def _spawn(args: list[str]) -> subprocess.Popen:
-    return subprocess.Popen([sys.executable, "-m", "recon.cli", *args], cwd=str(PROJECT_ROOT))
+    return subprocess.Popen([sys.executable, "-m", "recon.cli", *args])  # nosec B603
 
 
 def main() -> None:
@@ -111,7 +110,7 @@ def main() -> None:
         for proc in procs:
             try:
                 proc.wait(timeout=5)
-            except Exception:
+            except subprocess.TimeoutExpired:
                 proc.kill()
         sys.exit(0)
 

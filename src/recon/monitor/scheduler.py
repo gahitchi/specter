@@ -19,7 +19,13 @@ def enqueue_scan_for_target(target_id: int) -> int:
     with db.session() as s:
         target = s.get(m.Target, target_id)
         query = dict(target.query) if target else {}
-    return get_queue().enqueue("scan", {"query": query, "watchlist": True})
+        owner_id = target.owner_id if target else None
+    return get_queue().enqueue(
+        "scan",
+        {"query": query, "watchlist": True},
+        owner_id=owner_id,
+        target_id=target_id,
+    )
 
 
 class MonitorScheduler:
@@ -33,14 +39,20 @@ class MonitorScheduler:
 
         db = get_db()
         count = 0
+        desired = set()
         with db.session() as s:
             for sc in repo.list_schedules(s, enabled_only=True):
+                job_id = f"sched-{sc.id}"
+                desired.add(job_id)
                 self.sched.add_job(
                     self._fire, CronTrigger.from_crontab(sc.cron),
-                    args=[sc.id, sc.target_id], id=f"sched-{sc.id}",
+                    args=[sc.id, sc.target_id], id=job_id,
                     replace_existing=True,
                 )
                 count += 1
+        for job in self.sched.get_jobs():
+            if job.id.startswith("sched-") and job.id not in desired:
+                self.sched.remove_job(job.id)
         return count
 
     async def _fire(self, schedule_id: int, target_id: int) -> None:
@@ -49,9 +61,20 @@ class MonitorScheduler:
         with db.session() as s:
             repo.touch_schedule(s, schedule_id)
 
-    def start(self) -> None:
-        self.load()
+    def start(self) -> int:
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        loaded = self.load()
+        self.sched.add_job(
+            self.load,
+            IntervalTrigger(minutes=1),
+            id="reconcile-schedules",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
         self.sched.start()
+        return loaded
 
     def shutdown(self) -> None:
         self.sched.shutdown(wait=False)

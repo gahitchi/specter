@@ -13,11 +13,14 @@ from . import (
     abuseipdb,
     asn,
     breach,
+    bluesky,
     commoncrawl,
     dns_intel,
     domain,
     email,
     github,
+    gitlab,
+    hackernews,
     ip_geo,
     name,
     permute,
@@ -29,6 +32,7 @@ from . import (
     username,
     virustotal,
     wayback,
+    wikidata,
 )
 from .base import Module
 
@@ -57,6 +61,11 @@ MODULES: list[Module] = [
     shodan.MODULE,
     virustotal.MODULE,
     abuseipdb.MODULE,
+    # Optional expansion pack: dispatched only after the maturity gate passes.
+    gitlab.MODULE,
+    bluesky.MODULE,
+    hackernews.MODULE,
+    wikidata.MODULE,
 ]
 
 
@@ -64,5 +73,5 @@ def get_modules() -> list[Module]:
     return MODULES
 
 
-def applicable_modules(art: Artifact) -> list[Module]:
-    return [m for m in MODULES if m.accepts(art)]
+def applicable_modules(art: Artifact, *, expansion_enabled: bool = False) -> list[Module]:
+    return [m for m in MODULES if m.accepts(art, expansion_enabled=expansion_enabled)]

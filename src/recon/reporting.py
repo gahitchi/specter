@@ -5,6 +5,7 @@ reason-trail. Every claim is traceable — no black-box conclusions.
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
 from datetime import datetime, timezone
@@ -44,31 +45,89 @@ def to_csv(findings: list[Finding]) -> str:
     w = csv.writer(buf)
     w.writerow(["verdict", "confidence", "category", "source", "label", "url", "reasons"])
     for f in findings:
-        w.writerow([f.verdict.value, f.confidence, f.category, f.source, f.label,
-                    f.url or "", " | ".join(f.reasons)])
+        w.writerow([_csv_cell(value) for value in (
+            f.verdict.value, f.confidence, f.category, f.source, f.label,
+            f.url or "", " | ".join(f.reasons),
+        )])
     return buf.getvalue()
+
+
+def _csv_cell(value) -> str:
+    """Prevent spreadsheet formula execution when exported OSINT text is opened."""
+    text = str(value)
+    if text.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + text
+    return text
+
+
+def _profile_html(profile: dict | None) -> str:
+    if not profile:
+        return ""
+    identifiers = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(row.get('type', '')))}</td>"
+        f"<td>{html.escape(str(row.get('value', '')))}</td>"
+        f"<td>{html.escape(str(row.get('standing', '')))}</td>"
+        f"<td>{float(row.get('confidence') or 0):.2f}</td>"
+        "</tr>"
+        for row in profile.get("identifiers", [])
+    )
+    accounts = "".join(
+        "<li>"
+        f"{html.escape(str(row.get('label', '')))} — "
+        f"{html.escape(str(row.get('standing', '')))}"
+        + (f" — {html.escape(str(row.get('url')))}" if row.get("url") else "")
+        + "</li>"
+        for row in profile.get("accounts", [])
+    )
+    gaps = "".join(
+        f"<li>{html.escape(str(item))}</li>" for item in profile.get("gaps", [])
+    )
+    return (
+        "<h2>Profile synthesis</h2>"
+        f"<p><b>{html.escape(str(profile.get('title', 'Profile')))}</b> — "
+        f"{html.escape(str(profile.get('status', 'unresolved')))} — "
+        f"{float(profile.get('confidence') or 0):.0%} evidence confidence</p>"
+        f"<p>{html.escape(str(profile.get('assessment', '')))}</p>"
+        "<h3>Identifiers</h3>"
+        "<table><tr><th>Type</th><th>Value</th><th>Standing</th><th>Confidence</th></tr>"
+        f"{identifiers}</table>"
+        f"<h3>Public accounts</h3><ul>{accounts or '<li>None confirmed.</li>'}</ul>"
+        f"<h3>Unresolved gaps</h3><ul>{gaps or '<li>None recorded.</li>'}</ul>"
+        f"<p><small>{html.escape(str(profile.get('completeness_note', '')))}</small></p>"
+    )
 
 
 def to_pdf_html(query, findings, summary) -> str:
     """HTML used for PDF rendering (weasyprint) — also a standalone report."""
     rows = "".join(
         f"<tr class='{f.verdict.value}'><td>{f.verdict.value}</td>"
-        f"<td>{f.confidence:.2f}</td><td>{f.source}</td><td>{f.label}</td>"
-        f"<td>{'<br>'.join(f.reasons)}</td></tr>"
-        for f in findings if f.is_hit
+        f"<td>{f.confidence:.2f}</td><td>{html.escape(f.source)}</td>"
+        f"<td>{html.escape(f.label)}</td>"
+        f"<td>{'<br>'.join(html.escape(reason) for reason in f.reasons)}</td></tr>"
+        for f in findings if f.is_notable
     )
+    query_json = html.escape(json.dumps(query.model_dump(exclude_none=True)))
+    profile_html = _profile_html(summary.get("profile"))
+    summary_json = html.escape(json.dumps(
+        {key: value for key, value in summary.items() if key != "profile"},
+        indent=2,
+        default=str,
+    ))
+    disclaimer = html.escape(DISCLAIMER)
     return f"""<html><head><meta charset='utf-8'><style>
     body{{font:12px sans-serif}} table{{border-collapse:collapse;width:100%}}
     td,th{{border:1px solid #ccc;padding:4px;text-align:left;vertical-align:top}}
     .FOUND{{background:#eafaef}} .UNCERTAIN{{background:#fdf6e3}}
     </style></head><body>
     <h1>osint-recon report</h1>
-    <p><b>Query:</b> {json.dumps(query.model_dump(exclude_none=True))}</p>
-    <p><small>{DISCLAIMER}</small></p>
-    <h2>Hits</h2>
+    <p><b>Query:</b> {query_json}</p>
+    <p><small>{disclaimer}</small></p>
+    {profile_html}
+    <h2>Notable findings</h2>
     <table><tr><th>Verdict</th><th>Conf</th><th>Source</th><th>Label</th><th>Reasons</th></tr>
     {rows}</table>
-    <h2>Summary</h2><pre>{json.dumps(summary, indent=2)}</pre>
+    <h2>Summary</h2><pre>{summary_json}</pre>
     </body></html>"""
 
 
@@ -95,6 +154,7 @@ def entity_report(run_id: int) -> dict:
             "run_id": run_id,
             "target": {"id": target.id, "label": target.label, "query": target.query},
             "disclaimer": DISCLAIMER,
+            "profile": (run.stats or {}).get("profile"),
             "identities": [
                 {
                     "id": e.id, "label": e.label, "confidence": e.confidence,
@@ -103,7 +163,7 @@ def entity_report(run_id: int) -> dict:
                         {"source": o.source, "label": o.label, "url": o.url,
                          "verdict": o.verdict, "confidence": o.confidence,
                          "reliability": o.reliability, "reasons": o.reasons}
-                        for o in e.observations if o.verdict in ("FOUND", "UNCERTAIN")
+                        for o in e.observations if o.verdict == "FOUND"
                     ],
                 }
                 for e in entities

@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.10"
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: ubuntu-latest
+            python-version: "3.14"
+          - os: windows-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked --extra dev
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+      - run: uv run python -m recon.cli --help
+      - run: uv run python -c "from recon.sources import validate_contracts; assert not validate_contracts()"
+
+  package-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked --all-extras
+      - run: uv run --extra distributed pytest -q tests/test_arq_queue.py --no-cov
+      - run: uv build --clear --no-create-gitignore
+      - run: uv run twine check dist/*.whl dist/*.tar.gz
+      - run: uv run python scripts/release_check.py --dist-dir dist
+      - name: Verify wheel assets
+        run: >-
+          uv run python -c "import glob, zipfile;
+          wheel=glob.glob('dist/*.whl')[-1];
+          names=set(zipfile.ZipFile(wheel).namelist());
+          required={'recon/web/index.html','recon/web/app.js','recon/web/style.css','recon/data/sites.json','recon/data/calibration_labels.json','recon/migrations/versions/20260813_0001_maturity_schema.py','recon/migrations/versions/20260814_0004_job_activity.py'};
+          assert required <= names, required-names"
+      - name: Validate operator scripts
+        run: sh -n scripts/backup-postgres.sh scripts/restore-postgres.sh
+      - run: uv run bandit -q -c pyproject.toml -r src scripts
+      - name: Audit locked runtime dependencies
+        run: |
+          uv export --locked --extra pdf --extra postgres --extra distributed --extra secure --extra ml --no-dev --no-emit-project --format requirements-txt --output-file audit-requirements.txt
+          uv run pip-audit --cache-dir .cache/pip-audit --no-deps --disable-pip -r audit-requirements.txt
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:d4bb0a8c1b7bb2e29f976d099e7bfb9a5d8858cffe9e46b35cd302cd1f1f8168
+        env:
+          POSTGRES_DB: recon
+          POSTGRES_USER: recon
+          POSTGRES_PASSWORD: recon-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U recon -d recon"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      RECON_ENV: test
+      RECON_AUTO_MIGRATE: "0"
+      RECON_DB_DSN: postgresql+psycopg://recon:recon-ci-only@127.0.0.1:5432/recon
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked --extra postgres --extra dev
+      - run: uv run recon db-upgrade
+      - run: uv run recon db-check
+      - run: uv run python scripts/postgres_smoke.py
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate Compose configuration
+        env:
+          RECON_DOMAIN: recon.example.org
+        run: |
+          for source in deploy/secrets/*.example; do cp "$source" "${source%.example}"; done
+          docker compose -f compose.production.yaml config --quiet
+      - name: Build production image
+        run: docker build --tag osint-recon:ci .
+      - name: Smoke-test image entrypoint
+        run: docker run --rm osint-recon:ci --help

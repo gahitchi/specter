@@ -20,10 +20,16 @@ from .config import SETTINGS
 _TRACKED = ("httpx", "sqlalchemy", "jellyfish", "phonenumbers", "dnspython", "fastapi")
 
 
-@lru_cache(maxsize=1)
-def sites_dataset_hash() -> str:
-    root = Path(__file__).resolve().parents[2]
-    p = root / SETTINGS.sites_data_file
+def sha256_file(path: str | Path) -> str:
+    """Hash an input file for provenance without embedding its path or content."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+@lru_cache(maxsize=16)
+def sites_dataset_hash(path: str | None = None) -> str:
+    p = Path(path or SETTINGS.sites_data_file).expanduser()
+    if not p.is_absolute():
+        p = Path.cwd() / p
     try:
         return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
     except OSError:
@@ -56,7 +62,7 @@ def provenance(settings=SETTINGS) -> dict:
         "platform": f"{platform.system()} {platform.release()}",
         "deterministic": settings.deterministic,
         "probe_seed": settings.probe_seed if settings.deterministic else None,
-        "sites_dataset_sha256": sites_dataset_hash(),
+        "sites_dataset_sha256": sites_dataset_hash(settings.sites_data_file),
         "thresholds": _thresholds(settings),
         "engine": {
             "scope_mode": settings.scope_mode,
@@ -65,6 +71,11 @@ def provenance(settings=SETTINGS) -> dict:
             "max_requests": settings.max_requests,
             "passive_only": settings.passive_only,
             "confidence_independence": settings.confidence_independence,
+        },
+        "reasoning": {
+            "version": 1,
+            "adaptive_dispatch": True,
+            "evidence_bound": True,
         },
         "dependencies": {pkg: _ver(pkg) for pkg in _TRACKED},
         "argv": " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "",
@@ -82,7 +93,7 @@ def finding_trace(*, module: str, source: str, rule=None, ev=None,
         "module": module,
         "source": source,
         "deterministic": settings.deterministic,
-        "dataset_sha256": sites_dataset_hash(),
+        "dataset_sha256": sites_dataset_hash(settings.sites_data_file),
         "thresholds": _thresholds(settings),
     }
     if rule is not None:

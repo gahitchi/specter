@@ -1,398 +1,462 @@
 # osint-recon
 
-A **local-first, professional-grade OSINT investigation framework**. It keeps the
-original overriding goal — **the fewest possible false positives** (soft-404s
-where a site returns `200 OK` for *any* profile URL are rejected, not reported) —
-and builds a full investigation platform around it: a **probabilistic correlation
-engine + identity graph**, **durable persistence**, **long-term monitoring with
-change detection**, and a **pluggable scale-out** path.
+`osint-recon` is a local-first OSINT research framework for authorized
+investigations. It collects public evidence, rejects common soft-404 false
+positives, follows bounded pivots, correlates confirmed observations, and stores
+runs for reporting and change detection.
 
-Inspired by [Specter](https://github.com/gahitchi/osint): deterministic (no LLM),
-local-only, SSE-streamed, with identity clustering and exportable reports.
-
-## What this is — and isn't
-
-OSINT automation does **not** produce a finished "target profile". This tool is a
-*discovery + verification + correlation* aid that is explicit about uncertainty:
-
-- It separates **discovery** (broad, noisy candidates) from **verification**
-  (strict, calibrated) and labels which phase produced each hit.
-- Every result is one of **FOUND / UNCERTAIN / UNVERIFIABLE / NOT_FOUND** with an
-  explainable `reasons[]` trail — **a bare `200 OK` never becomes a confident
-  FOUND**, and a bot-wall/CAPTCHA becomes **UNVERIFIABLE**, never a guess.
-- Correlation is **probabilistic**: ambiguous matches are surfaced for REVIEW, not
-  silently merged.
-
-It does not replace human analysis, and it cannot defeat platform anti-bot
-defenses — it reports honestly when it is blocked. **Authorized / educational use
-only.**
-
-## How it answers the common failure modes of recon wrappers
-
-| Common flaw | How osint-recon addresses it |
-|---|---|
-| **1. False sense of accuracy** (treats tool output as truth) | Multi-layer verify engine: control-probe baseline + site rule + content-similarity → FOUND/UNCERTAIN/NOT_FOUND; never "200 = found" (`verify/`) |
-| **2. No normalization** | One normalization layer for usernames/emails/domains/URLs/platforms, used by both queries and correlation (`normalize.py`) |
-| **3. No confidence scoring** | Per-finding confidence + per-source reliability + reliability-weighted entity confidence + **conflict resolution** picking canonical values by trust (`correlate/confidence.py`, `graph.py`) |
-| **4. Brittle scraping** | Per-site detection rules + **soft-404 baseline**; circuit breakers + result cache so site changes/outages degrade gracefully (`connectors/`) |
-| **5. No adversarial-defense handling** | Detects Cloudflare/Akamai/DataDome/PerimeterX/Imperva/CAPTCHA/JS-gate/rate-limit → **UNVERIFIABLE** instead of a false verdict (`verify/defenses.py`) |
-| **6. recon vs verification mixed** | Explicit **phase** label (`discovery` vs `verified`) on every hit |
-| **7. Hard dependency chains** | Pure-Python; shells out to **no** external CLI tools (no Sherlock/social-analyzer subprocesses), so nothing breaks on rolling distros |
-| **8. No reproducibility** | Deterministic seeded probe mode (`RECON_DETERMINISTIC=1`), pinned `requirements.lock`, and provenance (tool/dataset hash/dep versions/thresholds) stamped into every report (`provenance.py`) |
-| **9. Output not intelligence-ready** | Persistent identity graph: clustering, de-duplication, relationship edges, confidence (`correlate/`, `store/`) |
-| **10. "run this → full profile" misconception** | The framing above; honest UNVERIFIABLE/REVIEW states; disclaimers on every export |
-
-## What's new in v0.2 (framework upgrade)
-
-| Capability | Where |
-|---|---|
-| **Durable storage** (targets, runs, observations, entities, jobs) — SQLite by default, Postgres by DSN | `src/recon/store/` |
-| **Connector framework**: result cache, **circuit breakers**, per-source **reliability** scoring → re-runs don't depend on live APIs and a dead source can't stall a scan | `src/recon/connectors/` |
-| **Probabilistic correlation + identity graph**: blocking → Fellegi–Sunter-style weighted matching (Jaro-Winkler names) → MERGE/REVIEW/DISTINCT, with coherence/contradiction checks and confidence propagation | `src/recon/correlate/` |
-| **Long-term monitoring**: cron **scheduler** + run-over-run **change detection** (appeared/disappeared/changed via content fingerprint) | `src/recon/monitor/` |
-| **Scalability**: scans become **durable jobs**; in-process worker pool by default, optional Redis/arq workers + cross-process rate limiting | `src/recon/jobs/`, `ratelimit.py` |
-| **Dashboard + API**: investigations, timeline, identity graph, **interactive discovery map**, **insights**, source-health, and **modules/keys** tabs | `src/recon/server.py`, `web/` |
-
-These directly address the prior limitations: immature correlation, hard
-dependence on live APIs/scrapers, limited scalability, and source-driven output
-quality (now weighted by tracked reliability + contradiction checks).
-
-## What's new in v0.3 — the recursive engine
-
-A scan is no longer a single pass over the seed identifiers. It is now an
-**event-driven graph traversal**: seeds become typed **artifacts**, each artifact
-is dispatched to every **module** that consumes its type, and modules emit *new*
-artifacts that are fed back into the frontier until it drains. This is the
-auto-pivoting behavior that defines tools like SpiderFoot — but kept honest with
-hard ceilings and a scope policy, and feeding the same low-false-positive verify
-engine.
-
-| Capability | Where |
-|---|---|
-| **Recursive traversal**: `domain → subdomains → IPs → ASN/netblock`, `email → domain + username pivot`, `username → profile → cross-linked handles/emails` | `src/recon/engine.py`, `src/recon/modules/` |
-| **Typed artifact graph** (nodes + provenance edges), distinct from the identity-cluster graph | `src/recon/graph_models.py`, `store/models_db.py` (`artifacts`, `artifact_edges`) |
-| **Bounded & scoped**: `max_depth` / `max_artifacts` / `max_requests` ceilings + `strict`/`aggressive` scope so recursion never runs away or wanders off-target | `config.py`, `engine.ScopePolicy` |
-| **Keyless recursive modules**: DNS resolution, **Team Cymru** IP→ASN (DNS whois, no key), profile-link enrichment, Wayback CDX | `src/recon/modules/{resolve,asn,profile_links,wayback}.py` |
-| **Keyless-first, keys optional**: a module declares `requires_keys`; the engine skips it when keys are absent, so commercial sources (Shodan/HIBP/VT) can plug in later | `src/recon/keys.py` |
-
-```bash
-recon scan --domain example.com --max-depth 2 --scope strict
-recon graph --run 1          # depth-indented artifact tree (the pivot chain)
-recon serve                  # dashboard: interactive force-directed Discovery map,
-                             # plus a Modules & keys tab to manage optional API keys
-```
-
-### Source catalogue (v0.3 modules)
-
-18 modules feed the engine; new sources are cheap to add (one `Module` in
-`src/recon/modules/`, registered in `registry.py`). All flow through the same
-verify/reliability/scope machinery, so breadth arrives without the usual noise.
-
-| Family | Modules (keyless unless noted) |
-|---|---|
-| Accounts | `username` (curated seed **or full WhatsMyName 600+**), `github` (profile + **commit-email harvest**; key-enhanced), `profile_links` (cross-linked handles/emails) |
-| Email / breach | `email` (Gravatar/MX), `breach` (XposedOrNot; HIBP if keyed) |
-| Domain / DNS | `domain` (DNS/RDAP/crt.sh), `dns_intel` (SPF/DMARC/CAA + SPF-derived infra), `wayback`, `commoncrawl` |
-| Network | `resolve` (→IP), `asn` (Team Cymru), `ripestat` (RIR prefixes + abuse contact), `ip_geo` (ip-api) |
-| People | `phone` (offline libphonenumber), `name` (ORCID/OpenAlex) |
-| Keyed, optional | `shodan`, `virustotal`, `abuseipdb` — auto-skipped unless the key is set |
-
-```bash
-# Broaden username coverage to the full WhatsMyName dataset (opt-in):
-python scripts/fetch_wmn.py
-RECON_SITES_FILE=data/wmn-data.json recon scan --username torvalds
-
-# Optional keys: env (RECON_KEY_SHODAN=...) or ~/.config/osint-recon/keys.toml
-#   [keys]
-#   shodan = "..."   # also: virustotal, abuseipdb, github, hibp
-```
-
-## What's new in v0.4 — the dashboard, made interactive
-
-The recursive engine of v0.3 produced a rich artifact graph but only exposed it as
-JSON. v0.4 makes it (and the keyless-first key model) **visible and operable from
-the browser** — no new dependencies, no CDN, no build step.
-
-| Capability | Where |
-|---|---|
-| **Discovery map**: a self-contained **force-directed** render of a run's artifact graph on `<canvas>` — drag nodes, scroll to zoom, pan, hover for type/value, click for provenance (depth · module · confidence). Nodes colored by artifact type. | `web/app.js` (`startSim`), `web/index.html` |
-| **Module catalogue**: every module the engine can dispatch — what it consumes/produces, keyless vs keyed, and whether it's currently **enabled** (keyless, or key present) | `GET /api/modules`, `web/` Modules & keys tab |
-| **API-key management**: set/clear the optional keys from the UI; stored locally in `keys.toml` (0600). Values are **never** returned by the API — only configured/source status. | `GET/POST /api/keys`, `keys.KeyVault` |
-
-```bash
-recon serve     # open http://127.0.0.1:8000 → Discovery map · Modules & keys tabs
-```
-
-## What's new in v0.5 — the correlation-rules engine
-
-The recursive engine *finds* things; v0.5 *interprets* them. A **declarative
-correlation-rules engine** fires on a run's artifact graph and turns raw
-discovery into **insights** — the cross-platform links and exposure signals an
-analyst actually cares about. This is the layer SpiderFoot lacks: it has the
-events, but you're left to eyeball them.
-
-Rules are **data, not code** (`src/recon/rules/`), so new insights are a dict —
-add your own via `RECON_RULES_FILE` (JSON), overriding built-ins by `id`.
-
-| Rule kind | Fires when | Example built-in |
-|---|---|---|
-| `threshold` | ≥N artifacts match a clause | **email-in-breach**, **broad-subdomain-footprint**, **multi-network-infra** |
-| `co_occurrence` | every clause matches, tied by a shared derived key | **handle-reuse-breached** (a username and a breached email folding to the same handle) |
-| `shared` | one type, grouped, spanning ≥N distinct parents/platforms | **avatar-reuse** (one Gravatar across ≥2 accounts), **handle-across-platforms** |
-
-A clause can filter on any artifact field (`type`/`value`/`depth`/`data.*`) with
-ops (`eq/in/gte/contains/present/absent`). The `shared` kind is **edge-aware** —
-it counts distinct *incoming provenance*, so a single deduped node (e.g. an
-avatar hash reached from two emails) still registers as cross-account reuse.
-
-```bash
-recon scan --username torvalds        # insights print under the findings
-recon insights --run 1                # the rules that fired, with evidence
-recon serve                           # dashboard "Insights" tab + rule catalogue
-```
-
-Insights are persisted (`rule_findings`) and served at
-`GET /api/runs/{id}/rules`; the catalogue is `GET /api/rules`.
-
-## What's new in v0.6 — confidence you can trust
-
-This release invests in *trust* in the confidence number rather than the
-formula's sophistication: you can see exactly how a score was built, and a
-long-standing way the score over-counted corroboration is now measured.
-
-| Capability | Where |
-|---|---|
-| **Score explainability** — every confidence is an auditable `ScoreBreakdown`: a base prior plus signed, named contributions (`+0.20 status_vs_baseline`, `-0.50 soft404_reject`, …) that sum to the total. Shown in the dashboard ("why 0.85"), `recon scan --explain`, and JSON exports. | `src/recon/explain.py`, `verify/verdict.py`, `correlate/confidence.py` |
-| **Source-independence tracking** — corroboration breadth counted distinct source *names*, so three RIR-derived modules (Team Cymru, RIPEstat, ip-api) inflated confidence. Sources now map to *independence classes*; breadth over distinct classes is computed and shown as an `independence-adjusted` shadow score. | `src/recon/trust/independence.py` |
-| **Shadow-first rollout** — the independence weighting is *displayed* but does not change the official score until calibration validates it (`Settings.confidence_independence`, default off). | `config.py` |
-
-```bash
-recon scan --username torvalds --explain    # per-term breakdown under each finding
-```
-
-Independence classes are declarative and overridable via `RECON_INDEPENDENCE_FILE`.
-Breakdowns persist on `observations.breakdown` / `entities.breakdown`.
-
-**Robustness fixes that shipped with it:** the recursive engine runs sibling
-modules concurrently, which exposed two latent SQLite issues — a get-or-create
-race on the per-source reliability row (now caught + retried) and missing
-columns on older local DBs (now backfilled idempotently on startup; WAL +
-busy_timeout enabled for the concurrent workload).
-
-## What's new in v0.6.1 — provenance & traceability
-
-Every confidence number can now be traced back to the exact inputs that produced
-it, and every run carries a reproducibility stamp.
-
-| Capability | Where |
-|---|---|
-| **Per-finding trace** — each verified finding records the dataset rule it used, the live request (status / final URL / latency / block), the absent-baseline it was judged against, the active thresholds, and the dataset SHA + tool version. Reproducible (no wall-clock). Shown as a "trace" disclosure per result; persisted on `observations.trace`. | `provenance.finding_trace`, `collectors/username.py` |
-| **Run provenance** — each persisted run stamps the tool/python/platform, deterministic seed, dataset hash, thresholds, **engine settings** (scope / depth / passive / independence), and dependency versions. Served at `GET /api/runs/{id}/provenance`, shown in the runs table, printed by `recon provenance --run N`, and already embedded in JSON exports. | `provenance.provenance(settings)`, `orchestrator.scan` |
-
-```bash
-recon provenance --run 1     # the reproducibility stamp for a run
-```
-
-## What's new in v0.7 — calibration tooling
-
-Explainability tells you *how* a score was built; calibration tells you whether
-to *believe* it. `recon calibrate` measures the verify engine against
-ground-truth labels and answers the question that matters: when it says 0.8, is
-the account actually there ~80% of the time?
-
-| Capability | Where |
-|---|---|
-| **Calibration metrics** (pure, tested): reliability diagram, **Brier score**, **ECE/MCE**, confusion + **false-positive rate at the FOUND threshold**, and a non-binding threshold **suggestion**. | `src/recon/calibrate/metrics.py` |
-| **Ground truth**: a small curated `data/calibration_labels.json` of confirmed present/absent `(account, site)` pairs (extend via `RECON_CALIBRATION_FILE`); the control-probe baselines the engine already builds are free known-negatives. | `calibrate/labels.py` |
-| **Runner**: drives the *real* verify pipeline over the labels (evaluator is injectable, so the metrics stay offline-testable). Persists to `calibration_runs`; served at `GET /api/calibration`; shown in the dashboard's Insights tab. | `calibrate/runner.py` |
-| **Independence flip, validated**: calibration reports how many stored entities the source-independence (shadow) weighting would change — so flipping `confidence_independence` on is a data-informed decision, never automatic. | `calibrate/runner.independence_impact` |
-
-```bash
-recon calibrate        # reliability diagram + Brier/ECE + FP-rate + suggestion
-```
-
-It **suggests**, it never auto-tunes — thresholds stay a human decision. On the
-shipped labels the engine scores Brier ≈ 0.00 / ECE ≈ 0.02 with a 0% false-positive
-rate at FOUND≥0.75, confirming the threshold is well-placed.
-
-## What's new in v0.7.1 — confidence analytics
-
-A **Confidence** dashboard tab (and `recon analytics`) aggregates the trust
-signals the tool already records into a few honest views — the last piece of the
-"trust the score" arc.
-
-| View | What it answers |
-|---|---|
-| **Confidence distribution** + **verdict mix** | How decisive is the engine, and how often does it honestly say UNVERIFIABLE rather than guess? |
-| **Top score signals** | Which `ScoreBreakdown` terms drive confidence across the corpus, and their mean effect (e.g. `soft404_reject −0.50`, `query_in_body +0.20`). |
-| **Independence coverage** | Distinct source *names* vs independent *classes* — the corroboration-inflation factor (1.0× = no over-counting). |
-| **Source health** | Per-source reliability / successes / failures / breaker, worst first. |
-| **Calibration drift** | Brier / ECE across calibration runs — is the engine staying calibrated over time? |
-
-```bash
-recon analytics      # text summary; the dashboard renders charts (no CDN/deps)
-```
-
-Charts are drawn on a plain `<canvas>` — no external JS. Aggregations live in
-`src/recon/analytics.py` (pure, tested) and are served at `GET /api/analytics`.
+This is a pre-1.0 project. It has substantial automated test coverage, but its
+API and database schema may still change. The synthesized profile distinguishes
+operator input, confirmed facts, candidates, and unresolved gaps; it is an
+evidence summary, not proof of identity or a claim of completeness.
 
 ## What it does
 
-Give it any of: **username, email, phone, domain, real name.** It runs every
-relevant collector concurrently with no further interaction and streams verdicts
-as they resolve, then clusters them into candidate identities.
+- Accepts one username, email address, international phone number, domain, name,
+  public profile URL, or IP address and classifies it before collection starts.
+- Uses control probes, site-specific rules, response similarity, and block-page
+  detection instead of treating every `200 OK` as a match.
+- Traverses a typed discovery graph with strict depth, artifact, scope, and real
+  outbound-request ceilings.
+- Correlates confirmed observations using explicit signals and keeps ambiguous
+  entity matches for review.
+- Synthesizes a unified profile with confirmed identifiers, public accounts,
+  established details, evidence coverage, confidence, and explicit gaps.
+- Persists targets, runs, observations, graphs, source health, schedules, and
+  change events in SQLite by default.
+- Streams a live execution graph of inputs, module processes, sanitized outbound
+  requests, discovered artifacts, and verdict-colored findings. Durable worker
+  jobs persist compact graph state for production polling and replay.
+- Records immutable investigator decisions separately from automated verdicts.
+- Provides JSON, CSV, HTML/PDF reporting plus a loopback dashboard and gated,
+  authenticated TLS remote mode.
+- Supports isolated analyst accounts, reviewer access, and administrator roles.
+- Can train a portable, explainable identity-review model from independently
+  labeled observation pairs; the model never merges identities automatically.
+- Supports optional Shodan, VirusTotal, AbuseIPDB, GitHub, and HIBP credentials.
 
-| Input | Sources |
-|-------|---------|
-| username | site fanout across `data/sites.json`, each run through the FP engine |
-| email | Gravatar existence (+hash signal), MX/deliverability, username pivot |
-| phone | offline libphonenumber: validity, region, carrier, line type, timezones |
-| domain | DNS (A/AAAA/MX/NS/TXT), RDAP registration, crt.sh subdomains |
-| name | ORCID & OpenAlex structured author records (fuzzy-gated) |
+Every finding has one of these verdicts:
 
-## The false-positive engine (`src/recon/verify/`)
+| Verdict | Meaning | Counted as a hit? |
+| --- | --- | --- |
+| `FOUND` | Evidence met the configured confirmation threshold | Yes |
+| `UNCERTAIN` | Plausible but unconfirmed candidate | No |
+| `UNVERIFIABLE` | A block, challenge, or rate limit prevented a conclusion | No |
+| `NOT_FOUND` | Evidence indicates absence | No |
+| `ERROR` | The source or module failed | No |
 
-Every candidate URL passes a layered, **explainable** verdict pipeline. A site is
-`FOUND` only after surviving all applicable layers; ambiguous cases become
-`UNCERTAIN` (shown, flagged) — never a silent false `FOUND`.
+Only `FOUND` observations drive identity correlation, change detection, and hit
+counts. `UNCERTAIN` findings remain visible in the live results and reports.
 
-- **Layer 0 — control-probe baseline** (`baseline.py`): probe each site with a
-  random *known-absent* username, learn its "no such user" status / redirect /
-  body fingerprint, cache per host. Everything is judged relative to this.
-- **Layer 1 — site rule** (`rules.py`): WhatsMyName-style `status_code` /
-  `message` / `response_url` detection from `data/sites.json`.
-- **Layer 2 — redirect / final-URL** vs the absent baseline.
-- **Layer 3 — content fingerprint diff** (`similarity.py`): SimHash similarity to
-  the absent baseline; high similarity ⇒ soft-404 ⇒ rejected. Plus positive
-  signals (queried term in body/title).
-- **Layer 4 — verdict** (`verdict.py`): combine into `FOUND/NOT_FOUND/UNCERTAIN`
-  with a confidence score and a `reasons[]` trail. **A bare 200 never becomes a
-  confident FOUND on its own.** Thresholds live in `config.py`.
+## Privacy model
 
-## Install
+"Local-first" describes storage and operation, not offline collection. The
+database, cache, keys file, and reports stay on the operator's machine. During a
+scan, supplied identifiers are sent to the selected public sources, and those
+services can observe the requests. Review the enabled modules and source terms
+before investigating sensitive subjects.
+
+The dashboard binds to `127.0.0.1` by default and rejects untrusted hosts,
+cross-site requests, and non-JSON mutations. Remote mode is a separate gated
+configuration with authentication, CSRF protection, TLS, and explicit trusted
+hosts. See
+[`SECURITY.md`](https://github.com/gahitchi/osint-recon/blob/main/SECURITY.md)
+for the security model and reporting process.
+
+## Quick start
+
+Python 3.10 through 3.14 is supported. Install the published CLI in an isolated
+environment with `pipx`:
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"          # add ,pdf for PDF export: ".[dev,pdf]"
-```
-
-### One-word launch: `specter`
-
-Install a terminal command that wakes the **whole stack** (dashboard server +
-background worker + monitoring scheduler) and opens the dashboard in a **Firefox**
-tab:
-
-```bash
-./scripts/install-specter.sh      # installs `specter` into ~/.local/bin
-specter                           # boots everything + opens Firefox
-```
-
-`specter` is idempotent: if the stack is already running it just opens the tab.
-Flags: `--no-browser` (headless), `--no-workers` (server only), `--port N`.
-Ctrl-C shuts the stack down cleanly.
-
-## Use
-
-```bash
-# Durable, correlated, persisted scan (full automation)
-recon scan --username torvalds --email someone@example.com
-recon scan --domain example.com --format json
-recon scan --username alice --all                 # also show NOT_FOUND/ERROR
-
-# Long-term monitoring: watch a target on a cron, then run the scheduler + a worker
-recon scan --username torvalds --watch "0 */6 * * *"
-recon monitor        # fires schedules -> enqueues jobs
-recon worker         # processes queued scan jobs (run several to scale out)
-
-# Inspect stored investigation data
-recon targets | recon runs | recon changes | recon sources
-
-# Web dashboard + API on http://127.0.0.1:8000
+pipx install osint-recon
+recon scan torvalds
 recon serve
 ```
 
-Back-compat: `recon --username x` (bare flags) still works and maps to `scan`.
-Reports (`--format json|csv|pdf`) land in `reports/` with full provenance, the
-verdict reason-trail, and a legal disclaimer.
-
-## Scaling out (optional)
-
-Everything defaults to local-first (SQLite + in-process workers). To scale:
+For development, [`uv`](https://docs.astral.sh/uv/) is the recommended
+environment and lockfile manager:
 
 ```bash
-pip install -e ".[postgres,distributed]"
-export RECON_DB_DSN="postgresql+psycopg://user:pass@host/recon"
-export RECON_REDIS_DSN="redis://localhost:6379"
-# set queue_backend = "arq" in config; run many `recon worker` processes
+git clone https://github.com/gahitchi/osint-recon.git
+cd osint-recon
+uv sync
+
+uv run recon scan torvalds
+uv run recon scan person@example.com
+uv run recon scan https://github.com/torvalds
+uv run recon scan --email person@example.com --domain example.com --explain
+uv run recon scan --domain example.com --max-depth 2 --max-requests 200
 ```
 
-No code changes — same `JobQueue`/`Store` interfaces, shared cross-process rate
-limiting keeps a fleet polite.
-
-## Tuning precision vs recall
-
-Edit `src/recon/config.py`:
-- `baseline_similarity_reject` (default 0.92) — higher = stricter soft-404 culling.
-- `found_confidence` / `uncertain_confidence` — verdict thresholds.
-
-We deliberately prefer marking a real-but-ambiguous hit `UNCERTAIN` over emitting
-a wrong `FOUND`.
-
-## Refreshing the site list
-
-`data/sites.json` is a small curated seed using the WhatsMyName `wmn-data.json`
-schema. Drop in more entries (or the full WhatsMyName dataset) to broaden
-coverage; auth-walled / ToS-restricted sites are excluded by default via
-`config.excluded_site_tags`.
-
-## Ethics & legal
-
-For **authorized research and educational use only.** Local-first (binds
-`127.0.0.1`), respects `robots.txt`, rate-limits per host, and sends an
-identifying User-Agent. Auth-walled platforms (Instagram, Discord, Facebook,
-X/Twitter, LinkedIn, Snapchat) are excluded by default. You are responsible for
-complying with applicable law and each site's terms.
-
-## Tests & quality
+Open the local dashboard:
 
 ```bash
-pytest -q          # 124 tests; coverage prints automatically (--cov is wired in)
-ruff check         # lint gate: pyflakes (dead code / undefined names) + pycodestyle
+uv run recon serve
+# http://127.0.0.1:8000
 ```
 
-The acceptance gate is `tests/test_verify_verdict.py`: soft-404s (200 + generic
-not-found body) must resolve to `NOT_FOUND`, genuine profiles to `FOUND`.
+`uv run specter` starts the dashboard, local worker, and monitor together.
+Use `--no-browser` or `--no-workers` when appropriate.
 
-The suite treats `ResourceWarning` as an **error** (`filterwarnings` in
-`pyproject.toml`), so a leaked SQLite handle fails CI rather than passing
-silently — `Database.close()` disposes the engine pool and the test fixture and
-`init_db` call it. `requirements.lock` pins the exact, tested dependency set
-(regenerate with `pip freeze --exclude-editable`).
+### One starting value
 
-## What's new in v0.8 — efficient & reliable clue search (Phase 6)
-
-Three improvements to the discovery engine itself: spend the request budget on
-the best leads, find more clues, and make corroboration trustworthy.
-
-| Area | What |
-| --- | --- |
-| **6a · Efficient traversal** | The request budget is now measured in *real outbound requests* (counted by the HTTP client), not module dispatches — one username dispatch fans out to 700+ site checks, so the old ceiling was meaningless. The frontier is expanded **best-first**: identity-bearing artifacts (email / profile / domain / username) outrank network breadcrumbs (IP / ASN / name), then confidence, then shallower depth. Each wave runs in priority-ordered batches and the budget is checked between them, so when requests run short the high-yield leads expand and low-value ones are skipped. |
-| **6b · Candidate-email pivot** (`modules/permute`) | `USERNAME`/`NAME` + a seed `DOMAIN` → candidate emails via common local-part patterns (`first.last`, `flast`, `handle@domain`, …). Each candidate is tested against a **deterministic** signal (Gravatar); only confirmed addresses are asserted `FOUND` and pivoted on. Unconfirmed candidates are surfaced once as a single `UNCERTAIN` lead and never recursed on — multiplying real clues without manufacturing false positives. No domain context → nothing generated. |
-| **6c · Visible corroboration** (`trust.corroboration`) | Every identity now reports *how trustworthy* its score is: how many genuinely **independent classes** confirm it vs. redundant sources inflating the count (`inflation` > 1 = looks broader than it is). Shown in `recon scan` output and the dashboard, on both summary paths. Purely descriptive — it explains the score without changing it, so no calibration gate is needed. |
+`recon scan VALUE` uses the same conservative classifier as the dashboard and
+API. Email, international phone, domain, URL, and IP syntax are recognized
+deterministically. A multi-word value is treated as a name. A single bare token
+is treated as a username but remains explicitly marked as an ambiguous
+classification. Use `--type` to override that interpretation:
 
 ```bash
-recon scan --name "Jane Doe" --domain acme.com   # 6b: gravatar-verified jane.doe@acme.com
-recon scan --username torvalds                    # 6c: "corroborated (N indep. class(es))"
-recon scan --domain example.com --max-requests 50 # 6a: budget spent best-first
+uv run recon scan mercury --type name
+uv run recon scan +14155552671
+uv run recon scan 8.8.8.8
 ```
 
-## What's new in v0.7.2 — hardening pass
+Known profile URLs also seed their public domain and, for recognized profile
+hosts, their handle. Local-network and credential-bearing URLs are rejected.
+Typed options remain available for investigations that begin with several known
+identifiers. A conflicting automatic and explicit value is rejected rather than
+silently choosing one.
 
-No new features — a correctness/quality sweep over the shipped v0.7.x framework:
+The New investigation workspace renders collection as it happens. Request
+details include the public host, sanitized URL, method, HTTP status, and duration;
+credential-like query values are redacted before an activity leaves the engine.
+In production, `Run and save` reads the same graph state from the durable job so
+collection remains outside the web process.
 
-| Hardened | What |
-| --- | --- |
-| **No leaked DB handles** | `Database.close()`/context-manager dispose the engine pool; `init_db` releases the prior global DB; tests gate `ResourceWarning` as an error (was 200+ unclosed-connection warnings). |
-| **Lint gate** | `ruff` (pyflakes + pycodestyle) added to `[dev]` and run clean — removed dead imports, fixed a forward-ref annotation, split multi-statement lines. |
-| **Coverage + tests** | `pytest-cov` wired into `pyproject.toml`; added real behavioural tests for the keyed intel modules (Shodan / VirusTotal / AbuseIPDB / ip-api — proving they are genuine integrations, not stubs) and the report serialisers. 107 → 124 tests. |
-| **Reproducible env** | `requirements.lock` regenerated from the verified venv; `.gitignore` now also excludes SQLite `-wal`/`-shm` sidecars. |
+The completed workspace presents a profile synthesis before the raw evidence.
+`provided` means operator input, `confirmed` means at least one source produced a
+`FOUND` observation, and `candidate` never participates in automatic identity
+merges. Coverage marked `checked` means sources ran without confirming a fact;
+it does not prove that the fact does not exist.
+
+Saved observations can be reviewed in the dashboard or from the CLI:
+
+```bash
+uv run recon review --observation 42 --decision accepted --note "verified independently"
+uv run recon review-labels --out reviewed-labels.json
+```
+
+Review decisions never overwrite the automated verdict. Their immutable history
+provides an audit trail and can supply independently checked calibration labels.
+
+The CLI can export a scan directly. JSON and HTML/PDF include the synthesized
+profile; CSV remains a flat finding table:
+
+```bash
+uv run recon scan --username torvalds --format json --out reports/torvalds.json
+uv run recon scan --username torvalds --format csv --out reports/torvalds.csv
+uv run recon scan --username torvalds --format pdf --out reports/torvalds.pdf
+```
+
+PDF output requires the optional dependency:
+
+```bash
+uv sync --extra pdf
+```
+
+Without WeasyPrint, a requested PDF falls back to a standalone HTML report.
+
+## Sources and pivots
+
+The default username dataset is a deliberately small curated set packaged with
+the application. A downloaded [WhatsMyName](https://github.com/WebBreacher/WhatsMyName)
+dataset must pass the HTTPS-only source-pack validator before use:
+
+```bash
+uv run python scripts/fetch_wmn.py
+uv run recon source-pack --input data/wmn-data.json --out data/wmn-validated.json
+RECON_SITES_FILE=data/wmn-validated.json RECON_ENABLE_EXPANSION=1 \
+  uv run recon scan --username torvalds
+```
+
+PowerShell equivalent:
+
+```powershell
+$env:RECON_SITES_FILE = "data/wmn-validated.json"
+$env:RECON_ENABLE_EXPANSION = "1"
+uv run recon scan --username torvalds
+```
+
+Modules include username verification, Gravatar and MX evidence, DNS/RDAP/CT
+data, name sources, phone normalization, GitHub public-profile enrichment,
+Wayback and Common Crawl lookups, network/ASN data, breach checks, and optional
+keyed reputation sources. The default mode runs modules marked passive. Use
+`--active` only when you understand the additional target interaction.
+
+After the maturity gate passes, expansion mode also enables exact-profile
+lookups through the official [GitLab Users API](https://docs.gitlab.com/api/users/),
+[Bluesky AppView API](https://docs.bsky.app/docs/tutorials/viewing-profiles),
+[Hacker News API](https://github.com/HackerNews/API), and name candidates from
+the [Wikidata API](https://www.mediawiki.org/wiki/Wikibase/API). These modules
+remain visible but gated before then.
+
+Every module has a source contract disclosing its operator, interaction type,
+evidence class, data sent, rate policy, and terms scope. The HTTP-only free
+`ip_geo` integration is retained for compatibility but disabled by default.
+
+## Investigation reasoning
+
+Each scan includes an evidence-bound planner. During traversal it reprioritizes
+the already-authorized module queue as findings arrive, favoring direct seed
+verification, novel evidence types, reliable sources, and independent
+corroboration. It never creates findings or changes their confidence scores.
+
+At completion the planner records:
+
+- the current investigation objective and an evidence-based assessment;
+- material uncertainties, including blocked sources and budget ceilings;
+- ranked next actions with confidence, prerequisites, and execution mode;
+- a compact wave-by-wave decision trace; and
+- the scope, collection-mode, module, and budget guardrails that remained active.
+
+Actions marked `automatic` are safe passive continuations within the existing
+authorization boundary. `manual` actions require investigator judgment, while
+`approval` actions may change scope or a bounded limit and are never executed
+silently. An automatic action remains `blocked` until its listed prerequisites
+exist. The dashboard exposes live and saved-run reasoning; saved reports are
+also available at `GET /api/runs/{run_id}/reasoning` and in `Run.stats`.
+
+The core planner is local and deterministic. No investigation data is sent to a
+language-model provider, and narrative output is never treated as evidence.
+
+Saved profile synthesis is available at `GET /api/runs/{run_id}/profile`. The
+same object is stored in `Run.stats.profile` and embedded in JSON and HTML/PDF
+reports. Domains and network observations remain infrastructure facts; they do
+not create person-identity nodes or merge people who share an organization.
+
+## Bounds and scope
+
+Traffic policy is centralized in one HTTP client:
+
+- `robots.txt` checks and redirect hops count toward `max_requests`.
+- Requests are rate-limited per host and globally concurrency-limited.
+- A request is rejected before transport if it would exceed the hard ceiling.
+- Response bodies are streamed only up to `max_body_bytes`.
+- Only absolute HTTP(S) URLs without embedded credentials are accepted.
+
+Strict scope, the default, expands identifiers tied to the original seed and
+records unrelated external links without following them. Aggressive scope can
+follow external pivots and is intentionally noisier.
+
+## Credentials
+
+Credentials can be supplied as environment variables:
+
+```bash
+RECON_KEY_SHODAN=...
+RECON_KEY_VIRUSTOTAL=...
+RECON_KEY_ABUSEIPDB=...
+RECON_KEY_GITHUB=...
+RECON_KEY_HIBP=...
+```
+
+The dashboard can also write known keys to
+`~/.config/osint-recon/keys.toml`. Values are never returned by the API. The file
+is written atomically with restrictive permissions where the operating system
+supports them; it is still plaintext, so environment variables or an OS secret
+manager are preferable on shared machines.
+
+Install the secure extra and select the OS keyring backend to avoid the plaintext
+file vault:
+
+```bash
+uv sync --extra secure
+RECON_KEY_BACKEND=keyring uv run recon serve
+```
+
+## Monitoring and workers
+
+Add a target to the watchlist while scanning:
+
+```bash
+uv run recon scan --username torvalds --watch "0 */6 * * *"
+uv run recon monitor
+uv run recon worker
+```
+
+Local jobs use atomic leases. A crashed worker's lease expires and can be
+reclaimed; repeated failures stop after the configured maximum attempts.
+
+For multi-machine workers, install the optional Redis/arq and Postgres drivers:
+
+```bash
+uv sync --extra distributed --extra postgres
+RECON_DB_DSN=postgresql+psycopg://user:pass@host/recon \
+RECON_REDIS_DSN=redis://redis-host:6379 \
+RECON_QUEUE_BACKEND=arq \
+uv run recon worker
+```
+
+All workers must share the same database and Redis instance. SQLite and Postgres
+schemas are upgraded through packaged Alembic revisions when the application
+opens the database. Back up valuable investigation data first. Operators can
+also inspect or apply revisions explicitly with `alembic current` and
+`alembic upgrade head`.
+
+## Calibration and confidence
+
+```bash
+uv run recon calibrate
+uv run recon analytics
+```
+
+Calibration reports include reliability bins, Brier score, ECE/MCE, confusion
+metrics, and a threshold suggestion. The packaged label file contains only a
+small functional fixture. It is not a statistically sufficient benchmark, and
+the tool marks reports based on a small or imbalanced sample as advisory. Supply
+independently verified labels through `RECON_CALIBRATION_FILE` before using the
+results to tune thresholds.
+
+The expansion gate combines representative calibration, migration state, source
+contracts, and recent designated canaries:
+
+```bash
+uv run recon source-check --config canaries.json --fail-on-skip
+uv run recon maturity
+```
+
+Canary configuration contains operator-designated test artifacts and is never
+included in the repository. Default CI runs contract and parser tests without
+sending identities to live sources. See
+[`MATURITY.md`](https://github.com/gahitchi/osint-recon/blob/main/MATURITY.md).
+
+Confidence scores are deterministic and explainable, but they are not universal
+probabilities until validated against representative ground truth for the
+operator's sources and use case.
+
+## Expansion capabilities
+
+All expansion capabilities fail closed until `recon maturity` reports `READY`.
+Setting `RECON_ENABLE_EXPANSION=1` does not bypass that check.
+
+Create independently verified identity-pair labels and train the optional model:
+
+```bash
+uv run recon pair-review --left 41 --right 87 --decision same \
+  --method "verified through independent account records" --reviewer analyst
+uv sync --extra ml
+uv run recon ml-train --out data/identity-model.json
+RECON_ENABLE_EXPANSION=1 RECON_ML_MODEL=data/identity-model.json \
+  uv run recon scan --username example
+```
+
+Training requires at least 100 latest pair labels with at least 20 examples in
+each class. Activation additionally requires held-out false-positive rate at or
+below 0.05 and ECE at or below 0.10. The JSON model contributes an explainable
+review suggestion to ambiguous entity edges; it cannot create an automatic
+merge.
+
+Bootstrap an administrator before enabling authenticated or remote service:
+
+```bash
+RECON_USER_PASSWORD="a long unique administrator password" \
+  uv run recon user-add administrator --role admin
+uv run recon user-list
+```
+
+Remote service requires a passed maturity gate, a non-loopback bind address, an
+active administrator, a certificate and private key, and explicit trusted host
+names:
+
+```bash
+uv run recon serve --remote --host 0.0.0.0 --port 8443 \
+  --allowed-hosts recon.example.org \
+  --tls-cert /etc/recon/fullchain.pem --tls-key /etc/recon/privkey.pem
+```
+
+Analysts see only targets they own. Reviewers can read and review all evidence
+but cannot scan or administer. Administrators manage accounts, credentials,
+retention, and the audit trail. Legacy targets without an owner remain visible
+only to administrators and reviewers.
+
+## Data governance
+
+Target exports are redacted by default. Raw labels, URLs, reasons, traces,
+signals, payloads, and review notes are omitted unless explicitly requested:
+
+```bash
+uv run recon export-target --target 7
+uv run recon export-target --target 7 --include-sensitive --out reports/target-7.json
+```
+
+Encrypted exports require the secure extra and a passphrase supplied through the
+environment rather than a command-line argument:
+
+```bash
+RECON_EXPORT_PASSPHRASE="a long private passphrase" \
+  uv run recon export-target --target 7 --include-sensitive --encrypt
+RECON_EXPORT_PASSPHRASE="a long private passphrase" \
+  uv run recon decrypt-export --input reports/target-7.orx --out target-7.json
+```
+
+Retention is always explicit. Preview before applying, or purge one subject and
+its dependent investigation graph:
+
+```bash
+uv run recon retention --days 90
+uv run recon retention --days 90 --apply
+uv run recon purge-target --target 7 --confirm
+```
+
+Deletion keeps only a count-based audit event; it does not retain the subject's
+query or evidence.
+
+## Production deployment
+
+The supported production profile uses Caddy for public TLS, one Uvicorn process
+per web container, PostgreSQL for durable state, Redis/arq workers for every
+scan, and a separate scheduler. Services fail closed on stale migrations,
+unsafe proxy trust, missing authentication, or an incomplete evidence maturity
+gate.
+
+Versioned multi-architecture images are published to GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/gahitchi/osint-recon:0.11.0
+docker run --rm ghcr.io/gahitchi/osint-recon:0.11.0 --help
+```
+
+Follow
+[`PRODUCTION.md`](https://github.com/gahitchi/osint-recon/blob/main/PRODUCTION.md)
+for artifact verification, secret generation, bootstrap, health checks,
+metrics, backup/restore drills, upgrades, and incident response. The included
+`compose.production.yaml` accepts a complete tagged or digest-pinned image
+reference through `RECON_IMAGE_REF`; use a digest for staging and production
+promotion.
+
+## Development
+
+```bash
+uv sync --locked --all-extras
+uv run ruff check .
+uv run pytest -q
+uv run bandit -q -c pyproject.toml -r src scripts
+uv build --clear --no-create-gitignore
+```
+
+`uv.lock` is the cross-platform reproducibility lock. CI tests Python 3.10
+through 3.14 on Linux plus Python 3.12 on Windows, builds the wheel, verifies
+that dashboard/data/migration assets are present, and runs dependency and static
+security audits. Weekly scheduled CI remains offline; live source canaries are
+run only after the operator explicitly authorizes their configured artifacts.
+
+Release history and support commitments live in
+[`CHANGELOG.md`](https://github.com/gahitchi/osint-recon/blob/main/CHANGELOG.md),
+[`SUPPORT.md`](https://github.com/gahitchi/osint-recon/blob/main/SUPPORT.md), and
+[`RELEASING.md`](https://github.com/gahitchi/osint-recon/blob/main/RELEASING.md).
+Contributions follow
+[`CONTRIBUTING.md`](https://github.com/gahitchi/osint-recon/blob/main/CONTRIBUTING.md)
+and the
+[`CODE_OF_CONDUCT.md`](https://github.com/gahitchi/osint-recon/blob/main/CODE_OF_CONDUCT.md).
+
+The curated site rules are based on the WhatsMyName schema and carry the
+attribution recorded in the dataset. The application code is MIT licensed.
+
+## Responsible use
+
+Use this software only for lawful, authorized research. Respect source terms,
+privacy rights, robots policies, and applicable rate limits. Do not treat an
+automated match as identity proof, and do not publish sensitive findings without
+independent verification and a legitimate basis.

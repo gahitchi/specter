@@ -50,11 +50,19 @@ def corroboration(identity: Identity) -> dict:
 
 
 def summarize(identities: list[Identity]) -> dict:
+    def label(identity: Identity) -> str:
+        for key in ("name", "email", "username", "phone_e164", "orcid"):
+            values = identity.signals.get(key)
+            if values:
+                return sorted(values)[0]
+        return "identity"
+
     return {
         "identities": len(identities),
         "clusters": [
             {
                 "id": idn.id,
+                "label": label(idn),
                 "score": score_identity(idn),
                 "confidence_shadow": score_identity_shadow(idn),
                 "corroboration": corroboration(idn),

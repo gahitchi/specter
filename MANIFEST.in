@@ -1,0 +1,18 @@
+include CHANGELOG.md
+include CODE_OF_CONDUCT.md
+include CONTRIBUTING.md
+include Dockerfile
+include LICENSE
+include MATURITY.md
+include PRODUCTION.md
+include README.md
+include RELEASING.md
+include SECURITY.md
+include SUPPORT.md
+include alembic.ini
+include compose.production.yaml
+include uv.lock
+recursive-include deploy *.example Caddyfile
+recursive-include scripts *.py *.sh
+global-exclude *.py[cod]
+global-exclude *.db *.db-shm *.db-wal

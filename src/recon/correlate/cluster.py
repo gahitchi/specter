@@ -12,7 +12,19 @@ from dataclasses import dataclass, field
 from ..models import Finding
 
 # Signal keys treated as strong enough to merge identities on their own.
-STRONG_KEYS = {"gravatar_hash", "orcid", "phone_e164", "email", "domain"}
+STRONG_KEYS = {"gravatar_hash", "orcid", "phone_e164", "email"}
+
+IDENTITY_CATEGORIES = {"username", "email", "phone", "name"}
+
+
+def identity_bearing(category: str) -> bool:
+    """Whether an observation can represent a person/account identity node.
+
+    Domains, hosts, and network observations belong in the discovery graph and
+    synthesized profile, but a shared organization domain is not unique-person
+    evidence and must never create or merge identity entities.
+    """
+    return category in IDENTITY_CATEGORIES
 
 
 class _UF:

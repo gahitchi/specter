@@ -33,6 +33,16 @@ def test_distinct_people_stay_separate():
     assert classify(w) == "DISTINCT"
 
 
+def test_shared_domain_is_not_identity_proof():
+    a = _rec(1, "domain", "DNS", {"domain": "example.com"})
+    b = _rec(2, "network", "rDNS", {"domain": "example.com"})
+
+    weight, reasons = score(a, b)
+
+    assert weight == 0
+    assert reasons == []
+
+
 def _seed_run(query, findings):
     db = get_db()
     with db.session() as s:
@@ -55,10 +65,38 @@ def test_correlate_run_clusters_by_strong_signal():
                 verdict=Verdict.UNCERTAIN, confidence=0.5, signals={"orcid": "0000-9"}),
     ])
     summary = correlate_run(db, rid)
-    # Ada's two email-linked observations merge; Babbage stays separate.
-    assert summary["identities"] == 2
+    # Ada's two confirmed observations merge. The unconfirmed Babbage candidate
+    # is retained as an observation but cannot create or influence an identity.
+    assert summary["identities"] == 1
     top = summary["clusters"][0]
     assert top["found"] >= 2
+    assert top["uncertain"] == 0
+
+
+def test_infrastructure_observations_do_not_create_identity_entities():
+    db, _target_id, run_id = _seed_run(Query(domain="example.com"), [
+        Finding(
+            source="domain:dns",
+            category="domain",
+            label="DNS example.com",
+            verdict=Verdict.FOUND,
+            confidence=0.9,
+            signals={"domain": "example.com"},
+        ),
+        Finding(
+            source="resolve:dns",
+            category="dns",
+            label="Resolve example.com",
+            verdict=Verdict.FOUND,
+            confidence=0.9,
+            signals={"domain": "example.com"},
+        ),
+    ])
+
+    summary = correlate_run(db, run_id)
+
+    assert summary["identities"] == 0
+    assert summary["clusters"] == []
 
 
 def test_conflict_resolution_picks_canonical_by_reliability():

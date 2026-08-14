@@ -27,7 +27,7 @@ async def _live_samples(rows: list[dict], settings: Settings) -> list[Sample]:
     from ..http_client import RateLimitedClient
     from ..verify.baseline import BaselineCache
 
-    rules = {r.name: r for r in load_sites()}
+    rules = {r.name: r for r in load_sites(settings=settings)}
     samples: list[Sample] = []
     async with RateLimitedClient(settings) as client:
         baselines = BaselineCache(client)

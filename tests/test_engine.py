@@ -62,6 +62,8 @@ async def test_recursion_cascades_domain_to_asn(monkeypatch):
 
     done = [e for e in events if e["type"] == "done"][0]
     assert done["artifacts"] == len(eng.artifacts)
+    summary = next(e["summary"] for e in events if e["type"] == "summary")
+    assert summary["profile"]["counts"]["artifacts"] == len(eng.artifacts)
 
 
 @pytest.mark.asyncio

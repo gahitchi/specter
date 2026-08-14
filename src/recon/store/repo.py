@@ -8,7 +8,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..models import Finding, Query
@@ -22,30 +22,35 @@ def _now() -> dt.datetime:
 # --- Targets ---------------------------------------------------------------
 
 def get_or_create_target(s: Session, query: Query, label: str | None = None,
-                         watchlist: bool = False) -> m.Target:
+                         watchlist: bool = False, owner_id: int | None = None) -> m.Target:
     q = query.normalized().model_dump(exclude_none=True)
     existing = s.execute(
-        select(m.Target).where(m.Target.query == q)
+        select(m.Target).where(m.Target.query == q, m.Target.owner_id == owner_id)
     ).scalars().first()
     if existing:
         if watchlist and not existing.watchlist:
             existing.watchlist = True
         return existing
-    t = m.Target(label=label or _label_for(q), query=q, watchlist=watchlist)
+    t = m.Target(
+        label=label or _label_for(q), query=q, watchlist=watchlist, owner_id=owner_id
+    )
     s.add(t)
     s.flush()
     return t
 
 
 def _label_for(q: dict) -> str:
-    for k in ("username", "name", "email", "domain", "phone"):
+    for k in ("username", "name", "email", "domain", "phone", "url", "ip_address"):
         if q.get(k):
             return str(q[k])
     return "target"
 
 
-def list_targets(s: Session, watchlist_only: bool = False) -> list[m.Target]:
+def list_targets(s: Session, watchlist_only: bool = False,
+                 owner_id: int | None = None, include_all: bool = True) -> list[m.Target]:
     stmt = select(m.Target).order_by(m.Target.created_at.desc())
+    if not include_all:
+        stmt = stmt.where(m.Target.owner_id == owner_id)
     if watchlist_only:
         stmt = stmt.where(m.Target.watchlist.is_(True))
     return list(s.execute(stmt).scalars().all())
@@ -77,10 +82,15 @@ def latest_finished_run(s: Session, target_id: int, before_run_id: int | None = 
     return s.execute(stmt).scalars().first()
 
 
-def list_runs(s: Session, target_id: int | None = None, limit: int = 50) -> list[m.Run]:
+def list_runs(s: Session, target_id: int | None = None, limit: int = 50,
+              owner_id: int | None = None, include_all: bool = True) -> list[m.Run]:
     stmt = select(m.Run).order_by(m.Run.started_at.desc()).limit(limit)
     if target_id is not None:
         stmt = stmt.where(m.Run.target_id == target_id)
+    if not include_all:
+        stmt = stmt.join(m.Target, m.Target.id == m.Run.target_id).where(
+            m.Target.owner_id == owner_id
+        )
     return list(s.execute(stmt).scalars().all())
 
 
@@ -112,15 +122,15 @@ def add_observation(s: Session, run: m.Run, finding: Finding,
 def observations_for_run(s: Session, run_id: int, hits_only: bool = False) -> list[m.Observation]:
     stmt = select(m.Observation).where(m.Observation.run_id == run_id)
     if hits_only:
-        stmt = stmt.where(m.Observation.verdict.in_(["FOUND", "UNCERTAIN"]))
-    return list(s.execute(stmt).scalars().all())
+        stmt = stmt.where(m.Observation.verdict == "FOUND")
+    return list(s.execute(stmt.order_by(m.Observation.id)).scalars().all())
 
 
 def observations_for_target(s: Session, target_id: int, hits_only: bool = True) -> list[m.Observation]:
     stmt = select(m.Observation).where(m.Observation.target_id == target_id)
     if hits_only:
-        stmt = stmt.where(m.Observation.verdict.in_(["FOUND", "UNCERTAIN"]))
-    return list(s.execute(stmt).scalars().all())
+        stmt = stmt.where(m.Observation.verdict == "FOUND")
+    return list(s.execute(stmt.order_by(m.Observation.id)).scalars().all())
 
 
 # --- Change events ---------------------------------------------------------
@@ -133,10 +143,15 @@ def add_change(s: Session, target_id: int, run_id: int, kind: str,
     return ev
 
 
-def list_changes(s: Session, target_id: int | None = None, limit: int = 100) -> list[m.ChangeEvent]:
+def list_changes(s: Session, target_id: int | None = None, limit: int = 100,
+                 owner_id: int | None = None, include_all: bool = True) -> list[m.ChangeEvent]:
     stmt = select(m.ChangeEvent).order_by(m.ChangeEvent.created_at.desc()).limit(limit)
     if target_id is not None:
         stmt = stmt.where(m.ChangeEvent.target_id == target_id)
+    if not include_all:
+        stmt = stmt.join(m.Target, m.Target.id == m.ChangeEvent.target_id).where(
+            m.Target.owner_id == owner_id
+        )
     return list(s.execute(stmt).scalars().all())
 
 
@@ -180,6 +195,81 @@ def list_entities(s: Session, target_id: int) -> list[m.Entity]:
 
 def list_sources(s: Session) -> list[m.Source]:
     return list(s.execute(select(m.Source).order_by(m.Source.name)).scalars().all())
+
+
+# --- Durable job activity -------------------------------------------------
+
+def clear_job_activity(s: Session, job_id: int) -> None:
+    s.execute(delete(m.JobActivity).where(m.JobActivity.job_id == job_id))
+
+
+def upsert_job_activity(s: Session, job_id: int, activities: list[dict]) -> None:
+    """Store only the newest state for each graph node in a compact batch."""
+    from hashlib import sha256
+
+    latest: dict[str, dict] = {}
+    for activity in activities:
+        node_id = str(activity.get("id") or "")
+        if node_id:
+            latest[node_id] = activity
+    for node_id, activity in latest.items():
+        node_key = sha256(node_id.encode("utf-8")).hexdigest()
+        row = s.execute(
+            select(m.JobActivity).where(
+                m.JobActivity.job_id == job_id,
+                m.JobActivity.node_key == node_key,
+            )
+        ).scalars().first()
+        sequence = int(activity.get("sequence") or 0)
+        if row is None:
+            s.add(m.JobActivity(
+                job_id=job_id,
+                node_key=node_key,
+                sequence=sequence,
+                payload=dict(activity),
+            ))
+        elif sequence >= row.sequence:
+            row.sequence = sequence
+            row.payload = dict(activity)
+            row.updated_at = _now()
+
+
+def list_job_activity(
+    s: Session, job_id: int, *, after: int = 0, limit: int = 500
+) -> list[m.JobActivity]:
+    return list(s.execute(
+        select(m.JobActivity)
+        .where(m.JobActivity.job_id == job_id, m.JobActivity.sequence > after)
+        .order_by(m.JobActivity.sequence, m.JobActivity.id)
+        .limit(limit)
+    ).scalars().all())
+
+
+def save_source_health_check(s: Session, result: dict) -> m.SourceHealthCheck:
+    row = m.SourceHealthCheck(
+        module=result["module"],
+        canary=result["name"],
+        status=result["status"],
+        duration_ms=result.get("duration_ms", 0),
+        requests=result.get("requests", 0),
+        detail=result.get("detail", {}),
+    )
+    s.add(row)
+    s.flush()
+    return row
+
+
+def latest_source_health_checks(s: Session) -> dict[str, m.SourceHealthCheck]:
+    rows = list(s.execute(
+        select(m.SourceHealthCheck).order_by(
+            m.SourceHealthCheck.module, m.SourceHealthCheck.created_at.desc(),
+            m.SourceHealthCheck.id.desc()
+        )
+    ).scalars().all())
+    latest: dict[str, m.SourceHealthCheck] = {}
+    for row in rows:
+        latest.setdefault(row.module, row)
+    return latest
 
 
 # --- Discovery graph (artifacts + edges) -----------------------------------

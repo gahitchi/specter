@@ -34,7 +34,7 @@ async def _xposedornot(ctx: ModuleContext, email: str) -> tuple[list[str], str |
 
 
 async def _hibp(ctx: ModuleContext, email: str, key: str) -> list[str]:
-    resp = await ctx.client._client.get(
+    resp = await ctx.client.fetch(
         f"https://haveibeenpwned.com/api/v3/breachedaccount/{quote(email)}?truncateResponse=true",
         headers={"hibp-api-key": key, "User-Agent": ctx.settings.user_agent})
     if resp.status_code != 200:

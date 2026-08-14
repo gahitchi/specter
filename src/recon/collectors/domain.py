@@ -11,7 +11,8 @@ from typing import Awaitable, Callable
 
 import dns.resolver
 
-from ..http_client import RateLimitedClient
+from ..http_client import RateLimitedClient, RequestBudgetExceeded
+from ..keys import redact
 from ..models import Finding, Query, Verdict
 
 EmitFn = Callable[[Finding], Awaitable[None]]
@@ -77,10 +78,12 @@ async def collect(query: Query, client: RateLimitedClient, emit: EmitFn) -> None
                 source="domain:rdap", category="domain", label="RDAP registration",
                 verdict=Verdict.NOT_FOUND, reasons=[f"no RDAP record (status {resp.status_code})"],
             ))
+    except RequestBudgetExceeded:
+        raise
     except Exception as e:  # noqa: BLE001
         await emit(Finding(
             source="domain:rdap", category="domain", label="RDAP registration",
-            verdict=Verdict.ERROR, reasons=[f"RDAP lookup failed: {e}"],
+            verdict=Verdict.ERROR, reasons=[f"RDAP lookup failed: {redact(str(e))}"],
         ))
 
     # --- Subdomains via certificate transparency (crt.sh) ---
@@ -105,8 +108,10 @@ async def collect(query: Query, client: RateLimitedClient, emit: EmitFn) -> None
             reasons=[f"{len(subs)} subdomain(s) in CT logs" if subs else "no CT subdomains found"],
             data={"subdomains": sorted(subs)[:200]},
         ))
+    except RequestBudgetExceeded:
+        raise
     except Exception as e:  # noqa: BLE001
         await emit(Finding(
             source="domain:crtsh", category="domain", label="Subdomains (crt.sh)",
-            verdict=Verdict.ERROR, reasons=[f"crt.sh lookup failed: {e}"],
+            verdict=Verdict.ERROR, reasons=[f"crt.sh lookup failed: {redact(str(e))}"],
         ))

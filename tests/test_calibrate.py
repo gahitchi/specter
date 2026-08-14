@@ -6,11 +6,31 @@ import pytest
 from fastapi.testclient import TestClient
 
 from recon.calibrate import metrics, run_calibration
+from recon.calibrate.labels import load_labels
 from recon.calibrate.metrics import Sample
 from recon.server import app
 from recon.store import get_db, repo
 
 client = TestClient(app)
+
+
+def test_label_loader_rejects_contradictory_ground_truth(tmp_path):
+    path = tmp_path / "labels.json"
+    path.write_text(
+        '{"labels": ['
+        '{"account":"same","site":"GitHub","present":true},'
+        '{"account":"same","site":"GitHub","present":false}'
+        ']}'
+    )
+    with pytest.raises(ValueError, match="contradictory"):
+        load_labels(path)
+
+
+def test_label_loader_deduplicates_identical_rows(tmp_path):
+    path = tmp_path / "labels.json"
+    row = '{"account":"same","site":"GitHub","present":true}'
+    path.write_text('{"labels": [' + row + "," + row + "]}")
+    assert len(load_labels(path)) == 1
 
 
 def _samples(pairs):

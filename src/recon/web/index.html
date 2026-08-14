@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>New investigation · osint-recon</title>
+  <link rel="stylesheet" href="/static/style.css?v=2c54ce13b808" />
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to workspace</a>
+
+  <div id="auth-gate" hidden>
+    <div class="auth-shell">
+      <div class="auth-brand">
+        <span class="brand-mark" aria-hidden="true">OR</span>
+        <div>
+          <strong>osint-recon</strong>
+          <span>Evidence workspace</span>
+        </div>
+      </div>
+      <form id="login-form" class="auth-dialog" autocomplete="on">
+        <div class="dialog-heading">
+          <span class="eyebrow">Restricted workspace</span>
+          <h1>Sign in</h1>
+        </div>
+        <label><span>Username</span><input name="username" autocomplete="username" required /></label>
+        <label><span>Password</span><input name="password" type="password" autocomplete="current-password" required /></label>
+        <button type="submit" class="primary-action">Sign in</button>
+        <span id="login-status" class="status-text" role="status" aria-live="polite"></span>
+      </form>
+    </div>
+  </div>
+
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true">OR</span>
+        <div>
+          <strong>osint-recon</strong>
+          <span>Evidence workspace</span>
+        </div>
+      </div>
+
+      <div class="workspace-state">
+        <span class="state-dot" aria-hidden="true"></span>
+        <span>Local workspace</span>
+        <strong>Active</strong>
+      </div>
+
+      <nav id="tabs" aria-label="Workspace navigation">
+        <div class="nav-group">
+          <p>Workspace</p>
+          <button type="button" data-tab="search" data-role="scan" data-title="New investigation" data-context="Workspace" class="active" aria-current="page">Search</button>
+          <button type="button" data-tab="investigations" data-title="Investigations" data-context="Workspace">Investigations</button>
+          <button type="button" data-tab="review" data-title="Evidence review" data-context="Workspace">Review</button>
+          <button type="button" data-tab="timeline" data-title="Change timeline" data-context="Workspace">Timeline</button>
+        </div>
+        <div class="nav-group">
+          <p>Analysis</p>
+          <button type="button" data-tab="graph" data-title="Identity graph" data-context="Analysis">Identity graph</button>
+          <button type="button" data-tab="map" data-title="Discovery map" data-context="Analysis">Discovery map</button>
+          <button type="button" data-tab="insights" data-title="Insights" data-context="Analysis">Insights</button>
+          <button type="button" data-tab="reasoning" data-title="Investigation reasoning" data-context="Analysis">Reasoning</button>
+          <button type="button" data-tab="confidence" data-role="review" data-title="Confidence analytics" data-context="Analysis">Confidence</button>
+        </div>
+        <div class="nav-group">
+          <p>Operations</p>
+          <button type="button" data-tab="sources" data-title="Source health" data-context="Operations">Source health</button>
+          <button type="button" data-tab="keys" data-role="admin" data-title="Modules and keys" data-context="Operations">Modules &amp; keys</button>
+          <button type="button" data-tab="governance" data-role="admin" data-title="Data governance" data-context="Operations">Governance</button>
+          <button type="button" data-tab="administration" data-role="admin" data-title="Administration" data-context="Operations">Administration</button>
+        </div>
+      </nav>
+
+      <div class="sidebar-meta">
+        <div><span>Storage</span><strong>Local</strong></div>
+        <div><span>Collection</span><strong>Networked</strong></div>
+      </div>
+    </aside>
+
+    <div class="app-main">
+      <header class="topbar">
+        <div class="page-heading">
+          <span class="eyebrow" id="page-context">Workspace</span>
+          <h1 id="page-title">New investigation</h1>
+        </div>
+        <div id="account" hidden>
+          <span class="account-avatar" aria-hidden="true">A</span>
+          <span id="account-name"></span>
+          <button type="button" id="logout" class="quiet-action">Sign out</button>
+        </div>
+      </header>
+
+      <main id="main-content" tabindex="-1">
+        <section class="panel active" id="panel-search" aria-labelledby="search-heading">
+          <h2 id="search-heading" class="sr-only">New investigation</h2>
+          <form id="q" class="scan-tool" autocomplete="off">
+            <fieldset class="subject-entry">
+              <legend>Starting point</legend>
+              <div class="subject-row">
+                <label class="subject-field"><span>One known detail</span><input name="subject" placeholder="Username, email, phone, name, domain, URL or IP" autocapitalize="none" spellcheck="false" /></label>
+                <div id="intake-preview" class="intake-preview" aria-live="polite"><strong>Automatic classification</strong><span>The starting value will be interpreted before any source is contacted.</span></div>
+              </div>
+              <details class="advanced-identifiers">
+                <summary>Add known identifiers</summary>
+                <div class="identifier-grid">
+                  <label><span>Username</span><input name="username" placeholder="torvalds" autocapitalize="none" spellcheck="false" /></label>
+                  <label><span>Email</span><input name="email" type="email" placeholder="user@example.com" autocapitalize="none" spellcheck="false" /></label>
+                  <label><span>Domain</span><input name="domain" placeholder="example.com" autocapitalize="none" spellcheck="false" /></label>
+                  <label><span>Phone</span><input name="phone" type="tel" placeholder="+14155552671" /></label>
+                  <label><span>Name</span><input name="name" placeholder="Ada Lovelace" /></label>
+                  <label><span>Profile URL</span><input name="url" type="url" placeholder="https://github.com/torvalds" autocapitalize="none" spellcheck="false" /></label>
+                  <label><span>IP address</span><input name="ip_address" placeholder="8.8.8.8" autocapitalize="none" spellcheck="false" /></label>
+                </div>
+              </details>
+            </fieldset>
+            <div class="scan-actions">
+              <div class="action-group">
+                <button type="submit" id="go" class="primary-action">Run live research</button>
+                <button type="button" id="save" class="secondary-action">Run and save</button>
+              </div>
+              <span id="status" class="scan-status" role="status" aria-live="polite">Ready</span>
+            </div>
+          </form>
+
+          <section class="execution-workspace" aria-labelledby="live-graph-heading">
+            <div class="execution-header">
+              <div>
+                <span class="eyebrow">Current scan</span>
+                <h3 id="live-graph-heading">Execution graph</h3>
+              </div>
+              <div class="execution-metrics" aria-label="Live activity totals">
+                <span><strong id="live-count-processes">0</strong> processes</span>
+                <span><strong id="live-count-requests">0</strong> requests</span>
+                <span><strong id="live-count-findings">0</strong> findings</span>
+              </div>
+              <div class="execution-actions">
+                <span id="live-graph-status" class="status-text" role="status" aria-live="polite">Idle</span>
+                <button type="button" id="live-graph-fit" class="quiet-action">Center</button>
+                <button type="button" id="live-graph-pause" class="quiet-action" aria-pressed="false">Pause</button>
+              </div>
+            </div>
+            <div class="execution-legend" aria-label="Execution graph legend">
+              <span><i class="input-node"></i>Input</span>
+              <span><i class="running-node"></i>Running</span>
+              <span><i class="success-node"></i>Successful</span>
+              <span><i class="uncertain-node"></i>Uncertain</span>
+              <span><i class="not-found-node"></i>Not found / error</span>
+            </div>
+            <div id="live-graph-wrap">
+              <canvas id="live-graph-canvas" tabindex="0" aria-label="Live investigation execution graph" aria-describedby="live-graph-a11y"></canvas>
+              <div id="live-graph-empty" class="graph-empty"><strong>No activity yet</strong><span>Ready for a live investigation.</span></div>
+              <div id="live-graph-tooltip" class="graph-tooltip" hidden></div>
+              <aside id="live-graph-detail" class="graph-detail" aria-live="polite"></aside>
+            </div>
+            <p id="live-graph-a11y" class="sr-only">Use the arrow keys while the graph is focused to inspect each activity node.</p>
+          </section>
+
+          <section class="results-workspace" aria-labelledby="results-heading">
+            <div class="results-toolbar">
+              <div>
+                <span class="eyebrow">Current scan</span>
+                <h3 id="results-heading">Evidence</h3>
+              </div>
+              <div class="verdict-filters" role="group" aria-label="Filter by verdict">
+                <button type="button" class="active" data-verdict-filter="ALL" aria-pressed="true">All <span data-verdict-count="ALL">0</span></button>
+                <button type="button" data-verdict-filter="FOUND" aria-pressed="false">Found <span data-verdict-count="FOUND">0</span></button>
+                <button type="button" data-verdict-filter="UNCERTAIN" aria-pressed="false">Uncertain <span data-verdict-count="UNCERTAIN">0</span></button>
+                <button type="button" data-verdict-filter="UNVERIFIABLE" aria-pressed="false">Blocked <span data-verdict-count="UNVERIFIABLE">0</span></button>
+                <button type="button" data-verdict-filter="ERROR" aria-pressed="false">Errors <span data-verdict-count="ERROR">0</span></button>
+                <button type="button" data-verdict-filter="NOT_FOUND" aria-pressed="false">Not found <span data-verdict-count="NOT_FOUND">0</span></button>
+              </div>
+            </div>
+            <div id="results-empty" class="empty-state">
+              <strong>Awaiting scan</strong>
+              <span>No evidence in the current workspace.</span>
+            </div>
+            <div class="table-wrap">
+              <table id="results" hidden>
+                <thead><tr><th>Verdict</th><th>Confidence</th><th>Source</th><th>Evidence</th><th>Reasoning</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <section id="profile" class="profile-region" hidden aria-label="Synthesized profile"></section>
+            <section id="summary" class="summary-region"></section>
+            <section id="live-reasoning" class="reasoning-region" hidden aria-label="Investigation reasoning"></section>
+          </section>
+        </section>
+
+        <section class="panel" id="panel-investigations" aria-labelledby="investigations-heading">
+          <h2 id="investigations-heading" class="sr-only">Investigations</h2>
+          <section class="section-block">
+            <div class="section-heading"><h3>Targets</h3></div>
+            <div id="targets" class="data-region"></div>
+          </section>
+          <section class="section-block">
+            <div class="section-heading"><h3>Recent runs</h3></div>
+            <div id="runs" class="data-region"></div>
+          </section>
+        </section>
+
+        <section class="panel" id="panel-review" aria-labelledby="review-heading">
+          <h2 id="review-heading" class="sr-only">Evidence review</h2>
+          <section class="section-block first-section">
+            <div class="section-heading"><h3>Observation queue</h3><span id="review-status" class="status-text" role="status"></span></div>
+            <div class="control-bar">
+              <label><span>Run ID</span><input id="review-run" type="number" min="1" placeholder="Latest" /></label>
+              <button type="button" id="review-load" class="secondary-action">Load observations</button>
+            </div>
+            <div id="review-observations" class="data-region"></div>
+          </section>
+          <section class="section-block">
+            <div class="section-heading"><h3>Identity pair label</h3></div>
+            <form id="pair-review-form" class="tool-form">
+              <label><span>Left observation</span><input name="left_observation_id" type="number" min="1" required /></label>
+              <label><span>Right observation</span><input name="right_observation_id" type="number" min="1" required /></label>
+              <label><span>Decision</span><select name="decision"><option value="same">Same identity</option><option value="distinct">Distinct identities</option></select></label>
+              <label class="wide-field"><span>Verification method</span><input name="verification_method" required minlength="5" /></label>
+              <div class="form-submit"><button type="submit" class="primary-action">Record label</button><span id="pair-review-status" class="status-text" role="status"></span></div>
+            </form>
+          </section>
+        </section>
+
+        <section class="panel" id="panel-timeline" aria-labelledby="timeline-heading">
+          <h2 id="timeline-heading" class="sr-only">Change timeline</h2>
+          <section class="section-block first-section">
+            <div class="section-heading"><h3>Detected changes</h3></div>
+            <div id="changes" class="data-region"></div>
+          </section>
+        </section>
+
+        <section class="panel" id="panel-graph" aria-labelledby="graph-heading">
+          <h2 id="graph-heading" class="sr-only">Identity graph</h2>
+          <div class="control-bar">
+            <label><span>Target ID</span><input id="graph-target" type="number" min="1" /></label>
+            <button type="button" id="graph-load" class="secondary-action">Load graph</button>
+          </div>
+          <div id="entities" class="data-region"></div>
+        </section>
+
+        <section class="panel" id="panel-map" aria-labelledby="map-heading">
+          <h2 id="map-heading" class="sr-only">Discovery map</h2>
+          <div class="control-bar">
+            <label><span>Run ID</span><input id="map-run" type="number" min="1" placeholder="Latest" /></label>
+            <button type="button" id="map-load" class="secondary-action">Load map</button>
+            <span id="map-status" class="status-text" role="status"></span>
+          </div>
+          <div id="map-legend" class="map-legend" aria-label="Artifact types"></div>
+          <div id="map-wrap">
+            <canvas id="map-canvas" aria-label="Discovery graph"></canvas>
+            <div id="map-detail" class="map-detail"></div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-insights" aria-labelledby="insights-heading">
+          <h2 id="insights-heading" class="sr-only">Insights</h2>
+          <section class="section-block first-section">
+            <div class="section-heading"><h3>Run insights</h3><span id="ins-status" class="status-text" role="status"></span></div>
+            <div class="control-bar">
+              <label><span>Run ID</span><input id="ins-run" type="number" min="1" placeholder="Latest" /></label>
+              <button type="button" id="ins-load" class="secondary-action">Load insights</button>
+            </div>
+            <div id="insights" class="data-region"></div>
+          </section>
+          <section class="section-block">
+            <div class="section-heading"><h3>Calibration</h3></div>
+            <div id="calibration" class="data-region"></div>
+          </section>
+          <section class="section-block">
+            <div class="section-heading"><h3>Rule catalogue</h3></div>
+            <div id="rulecat" class="data-region"></div>
+          </section>
+        </section>
+
+        <section class="panel" id="panel-reasoning" aria-labelledby="reasoning-heading">
+          <h2 id="reasoning-heading" class="sr-only">Investigation reasoning</h2>
+          <section class="section-block first-section">
+            <div class="section-heading"><h3>Investigation plan</h3><span id="reasoning-status" class="status-text" role="status"></span></div>
+            <div class="control-bar">
+              <label><span>Run ID</span><input id="reasoning-run" type="number" min="1" placeholder="Latest" /></label>
+              <button type="button" id="reasoning-load" class="secondary-action">Load reasoning</button>
+            </div>
+            <div id="reasoning-view" class="reasoning-region">
+              <div class="empty-state compact-empty"><strong>No plan loaded</strong><span>Select a saved run.</span></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="panel" id="panel-confidence" aria-labelledby="confidence-heading">
+          <h2 id="confidence-heading" class="sr-only">Confidence analytics</h2>
+          <div id="conf-summary" class="summary-region"></div>
+          <div class="chart-grid">
+            <section class="chart-panel"><div class="section-heading"><h3>Confidence distribution</h3></div><canvas id="conf-hist" width="420" height="200"></canvas></section>
+            <section class="chart-panel"><div class="section-heading"><h3>Calibration drift</h3><span class="metric-hint">Brier / ECE</span></div><canvas id="conf-drift" width="420" height="200"></canvas></section>
+          </div>
+          <section class="section-block"><div class="section-heading"><h3>Verdict mix</h3></div><div id="conf-verdicts"></div></section>
+          <section class="section-block"><div class="section-heading"><h3>Top score signals</h3></div><div id="conf-terms" class="data-region"></div></section>
+          <section class="section-block"><div class="section-heading"><h3>Source reliability</h3></div><div id="conf-sources" class="data-region"></div></section>
+        </section>
+
+        <section class="panel" id="panel-sources" aria-labelledby="sources-heading">
+          <h2 id="sources-heading" class="sr-only">Source health</h2>
+          <section class="section-block first-section">
+            <div class="section-heading"><h3>Reliability monitor</h3></div>
+            <div id="sources" class="data-region"></div>
+          </section>
+        </section>
+
+        <section class="panel" id="panel-keys" aria-labelledby="keys-heading">
+          <h2 id="keys-heading" class="sr-only">Modules and keys</h2>
+          <section class="section-block first-section">
+            <div class="section-heading"><h3>Provider credentials</h3><span id="keys-status" class="status-text" role="status"></span></div>
+            <div id="keys" class="data-region"></div>
+          </section>
+          <section class="section-block">
+            <div class="section-heading"><h3>Module catalogue</h3></div>
+            <div id="modules" class="data-region"></div>
+          </section>
+        </section>
+
+        <section class="panel" id="panel-governance" aria-labelledby="governance-heading">
+          <h2 id="governance-heading" class="sr-only">Data governance</h2>
+          <section class="section-block first-section">
+            <div class="section-heading"><h3>Target data</h3></div>
+            <div id="governance-targets" class="data-region"></div>
+          </section>
+          <section class="section-block">
+            <div class="section-heading"><h3>Retention</h3><span id="retention-status" class="status-text" role="status"></span></div>
+            <div class="control-bar">
+              <label><span>Inactive days</span><input id="retention-days" type="number" min="1" value="90" /></label>
+              <button type="button" id="retention-preview" class="secondary-action">Preview</button>
+              <button type="button" id="retention-apply" class="danger-action">Apply retention</button>
+            </div>
+          </section>
+          <section class="section-block"><div class="section-heading"><h3>Audit trail</h3></div><div id="audit-events" class="data-region"></div></section>
+        </section>
+
+        <section class="panel" id="panel-administration" aria-labelledby="administration-heading">
+          <h2 id="administration-heading" class="sr-only">Administration</h2>
+          <section class="section-block first-section">
+            <div class="section-heading"><h3>Expansion readiness</h3></div>
+            <div id="expansion-status" class="data-region"></div>
+          </section>
+          <section class="section-block">
+            <div class="section-heading"><h3>Accounts</h3></div>
+            <form id="user-form" class="tool-form">
+              <label><span>Username</span><input name="username" required minlength="3" /></label>
+              <label><span>Display name</span><input name="display_name" /></label>
+              <label><span>Role</span><select name="role"><option value="analyst">Analyst</option><option value="reviewer">Reviewer</option><option value="admin">Administrator</option></select></label>
+              <label><span>Password</span><input name="password" type="password" required minlength="12" autocomplete="new-password" /></label>
+              <div class="form-submit"><button type="submit" class="primary-action">Create account</button><span id="user-status" class="status-text" role="status"></span></div>
+            </form>
+            <div id="users" class="data-region"></div>
+          </section>
+        </section>
+      </main>
+
+      <footer>
+        <span>Authorized research only</span>
+        <span>Local storage</span>
+        <span>Bounded network collection</span>
+      </footer>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=f433a4f391e7"></script>
+</body>
+</html>
