@@ -49,14 +49,21 @@ jobs:
       - run: uv run pytest -q
       - run: uv run python -m recon.cli --help
       - run: uv run python -c "from recon.sources import validate_contracts; assert not validate_contracts()"
-      - name: Smoke-test native desktop
-        if: matrix.desktop_extra != ''
+      - name: Smoke-test native desktop on Windows
+        if: runner.os == 'Windows' && matrix.desktop_extra != ''
         env:
           QT_QPA_PLATFORM: offscreen
           QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
           QTWEBENGINE_DISABLE_SANDBOX: "1"
           QT_QUICK_BACKEND: software
         run: uv run python scripts/desktop_smoke.py
+      - name: Smoke-test native desktop on Linux
+        if: runner.os == 'Linux' && matrix.desktop_extra != ''
+        env:
+          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
+          QT_QUICK_BACKEND: software
+        run: xvfb-run --auto-servernum uv run python scripts/desktop_smoke.py
       - name: Validate Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
