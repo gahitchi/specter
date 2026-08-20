@@ -27,6 +27,9 @@ evidence summary, not proof of identity or a claim of completeness.
 - Streams a live execution graph of inputs, module processes, sanitized outbound
   requests, discovered artifacts, and verdict-colored findings. Durable worker
   jobs persist compact graph state for production polling and replay.
+- Presents live research as a readable Research Room: real activity drives its
+  phase trail, current-step explanation, discovery journal, milestones, and
+  animated graph. Focus keeps it calm; Explore exposes branches and provenance.
 - Records immutable investigator decisions separately from automated verdicts.
 - Provides JSON, CSV, HTML/PDF reporting plus a loopback dashboard and gated,
   authenticated TLS remote mode.
@@ -47,6 +50,13 @@ Every finding has one of these verdicts:
 
 Only `FOUND` observations drive identity correlation, change detection, and hit
 counts. `UNCERTAIN` findings remain visible in the live results and reports.
+
+During a scan, the Activity view can be left in **Focus** for a guided account
+of the investigation or switched to **Explore** for graph inspection. Journal
+entries focus their corresponding graph nodes. A selected node can isolate its
+branch, explain why it is connected, or prepare the discovered value as a new
+starting point. These controls never fabricate progress or silently expand the
+scope of the running investigation.
 
 ## Privacy model
 
@@ -81,35 +91,67 @@ Arch Linux:
 curl -LsSf https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/install.sh | bash
 ```
 
-The installer opens the dashboard. Later, run `specter` to start the dashboard,
-worker, and monitor together. While Specter is running, it checks the GitHub
-branch immediately and then every five minutes. When the installed revision is
-behind, Specter downloads the exact newer revision to a local cache without
-changing the running application. Offline failures do not prevent startup.
-Pass `--no-update` or set `RECON_AUTO_UPDATE=0` to disable these checks.
+Existing installations from before the desktop release should run the matching
+installer once more. That one-time repair adds the Qt desktop components and
+operating-system menu entry; later application updates use the built-in update
+manager.
 
-When Specter announces that an update is ready, stop it with `Ctrl-C`, then
-apply the downloaded revision explicitly:
+The installer opens Specter as a desktop application and adds it to the Windows
+Start menu or Linux application menu. The local API, worker, and monitor are
+started and stopped with the application. A second launch brings the existing
+window forward instead of starting another copy.
+
+Specter checks the GitHub branch immediately and every five minutes while it is
+running. A newer build is downloaded to a local cache without changing the
+running application. Offline failures do not prevent startup. Open **Tools >
+Update Manager** to see recent build names, dates, and statuses; download a
+specific build; or install the downloaded build. A manually selected build is
+not replaced by the five-minute background check. Installation is always an
+explicit choice, and Specter restarts after it completes. Update checks and
+notifications can be changed under **Tools > Settings**.
+
+Until tagged releases are published, Version History lists immutable builds
+from the `gpt-branch` commit history. This also allows an older build to be
+downloaded and installed. Specter warns before an older build is selected
+because data created by newer builds may not be backward compatible. Automatic
+checks may still download a newer build later, but they never install it.
+
+The terminal fallback remains available:
 
 ```text
 specter --update
 ```
 
-The command checks once for a newer revision before applying, so it also works
-when no update has been cached yet. A previously downloaded update can still be
-applied if GitHub is temporarily unavailable. Specter refuses to replace its
-installation while another Specter instance is running. Rerunning the platform
-installer remains a safe way to repair the isolated environment in place.
+If no build is waiting, the command checks once before applying. It uses an
+already downloaded build exactly as selected, including when GitHub is
+temporarily unavailable. Specter refuses to replace its installation while
+another instance is running. Rerunning the platform installer repairs the
+isolated environment in place.
 
-The Python distribution retains the compatibility name `osint-recon`. To remove
-its binaries and isolated environment, run `uv tool uninstall osint-recon`.
-Uninstalling does not delete investigation databases or configuration.
+The Python distribution retains the compatibility name `osint-recon`. Use the
+matching one-command uninstaller to remove the application and menu entry:
+
+```powershell
+irm https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/uninstall.ps1 | iex
+```
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/uninstall.sh | bash
+```
+
+Uninstalling leaves investigation databases and settings in place.
+
+Local application data is stored under `%LOCALAPPDATA%\Specter` on Windows or
+`${XDG_DATA_HOME:-~/.local/share}/specter` on Linux. Settings use `%APPDATA%\Specter`
+or `${XDG_CONFIG_HOME:-~/.config}/specter`, and logs use the platform state
+directory. On first launch, an older `data/recon.db` database is copied into the
+stable application-data location without deleting the original.
 
 Python 3.10 through 3.14 is supported. The published CLI can also be installed
 in an isolated environment with `pipx`:
 
 ```bash
-pipx install osint-recon
+pipx install 'osint-recon[desktop]'
 specter scan torvalds
 specter serve
 ```
@@ -120,7 +162,7 @@ environment and lockfile manager:
 ```bash
 git clone https://github.com/gahitchi/osint-recon.git
 cd osint-recon
-uv sync
+uv sync --extra desktop
 
 uv run specter scan torvalds
 uv run specter scan person@example.com
@@ -129,16 +171,16 @@ uv run specter scan --email person@example.com --domain example.com --explain
 uv run specter scan --domain example.com --max-depth 2 --max-requests 200
 ```
 
-Open the local dashboard:
+Run the web service without the desktop shell:
 
 ```bash
 uv run specter serve
 # http://127.0.0.1:8000
 ```
 
-`uv run specter` starts the dashboard, local worker, and monitor together.
-Development checkouts do not update themselves. Use `--no-browser`,
-`--no-workers`, or `--no-update` when appropriate.
+`uv run --extra desktop specter` starts the desktop application and its local
+services together. Development checkouts do not update themselves. Use
+`--headless`, `--no-workers`, or `--no-update` when appropriate.
 
 ### One starting value
 

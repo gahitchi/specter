@@ -155,13 +155,39 @@ class Database:
 
 
 def _default_dsn() -> str:
-    dsn = env_value("RECON_DB_DSN", SETTINGS.storage_dsn) or SETTINGS.storage_dsn
+    configured = env_value("RECON_DB_DSN")
+    dsn = configured or SETTINGS.storage_dsn
+    if configured is None:
+        dsn = _migrate_legacy_database(dsn)
     if dsn.startswith("sqlite") and ":memory:" not in dsn:
         # Ensure parent dir exists for file-based sqlite.
         path = dsn.split("///", 1)[-1]
         if path:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
     return dsn
+
+
+def _migrate_legacy_database(target_dsn: str) -> str:
+    """Copy the old working-directory database into the stable app data path."""
+    if not target_dsn.startswith("sqlite:///") or ":memory:" in target_dsn:
+        return target_dsn
+    target = Path(target_dsn.split("///", 1)[-1])
+    legacy = (Path.cwd() / "data" / "recon.db").resolve()
+    try:
+        if target.resolve() == legacy or target.exists() or not legacy.is_file():
+            return target_dsn
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source = sqlite3.connect(legacy)
+        destination = sqlite3.connect(target)
+        try:
+            source.backup(destination)
+        finally:
+            destination.close()
+            source.close()
+        return target_dsn
+    except (OSError, sqlite3.Error):
+        target.unlink(missing_ok=True)
+        return f"sqlite:///{legacy.as_posix()}"
 
 
 _DB: Optional[Database] = None

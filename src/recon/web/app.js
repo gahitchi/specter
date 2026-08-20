@@ -44,6 +44,10 @@ function applyRole() {
   } else {
     $("#account").hidden = true;
   }
+  document.querySelectorAll(".nav-curtain").forEach((curtain) => {
+    curtain.hidden = ![...curtain.querySelectorAll("button[data-tab]")]
+      .some((button) => !button.hidden);
+  });
   const active = document.querySelector("#tabs button.active");
   if (active && active.hidden) {
     const fallback = [...document.querySelectorAll("#tabs button")].find(button => !button.hidden);
@@ -74,6 +78,8 @@ function loadTabData(tab) {
 
 function activateTab(button, updateHash = true) {
   if (!button || button.hidden) return;
+  const curtain = button.closest(".nav-curtain");
+  if (curtain) curtain.open = true;
   document.querySelectorAll("#tabs button").forEach((item) => {
     const selected = item === button;
     item.classList.toggle("active", selected);
@@ -91,6 +97,15 @@ function activateTab(button, updateHash = true) {
   loadTabData(button.dataset.tab);
 }
 
+document.querySelectorAll(".nav-curtain").forEach((curtain) => {
+  curtain.addEventListener("toggle", () => {
+    if (!curtain.open) return;
+    document.querySelectorAll(".nav-curtain").forEach((other) => {
+      if (other !== curtain) other.open = false;
+    });
+  });
+});
+
 document.querySelectorAll("#tabs button").forEach((button) => {
   button.addEventListener("click", () => activateTab(button));
 });
@@ -99,6 +114,46 @@ window.addEventListener("hashchange", () => {
   const tab = location.hash.slice(1);
   activateTab(document.querySelector(`#tabs button[data-tab="${CSS.escape(tab)}"]`), false);
 });
+
+function setScanStage(stage, { focus = false } = {}) {
+  const selectedButton = document.querySelector(`[data-scan-view="${stage}"]`);
+  if (!selectedButton) return;
+  document.querySelectorAll("[data-scan-view]").forEach((button) => {
+    const selected = button === selectedButton;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  document.querySelectorAll("[data-scan-stage]").forEach((panel) => {
+    const selected = panel.dataset.scanStage === stage;
+    panel.hidden = !selected;
+    panel.classList.toggle("active", selected);
+  });
+  if (stage === "activity") {
+    requestAnimationFrame(() => {
+      sizeLiveCanvas();
+      scheduleLiveGraph();
+    });
+  }
+  if (focus) selectedButton.focus();
+}
+
+document.querySelectorAll("[data-scan-view]").forEach((button) => {
+  button.addEventListener("click", () => setScanStage(button.dataset.scanView));
+  button.addEventListener("keydown", (event) => {
+    const tabs = [...document.querySelectorAll("[data-scan-view]")];
+    const current = tabs.indexOf(button);
+    let next = current;
+    if (event.key === "ArrowRight") next = (current + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") next = (current - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    setScanStage(tabs[next].dataset.scanView, { focus: true });
+  });
+});
+setScanStage("start");
 
 $("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -154,10 +209,17 @@ function setScanStatus(message, tone = "neutral") {
   status.dataset.tone = tone;
 }
 
+function desktopNotify(title, message, level = "info") {
+  window.dispatchEvent(new CustomEvent("specter:notification", {
+    detail: { title, message, level },
+  }));
+}
+
 function updateVerdictCounts() {
   document.querySelectorAll("[data-verdict-count]").forEach((item) => {
     item.textContent = verdictCounts[item.dataset.verdictCount] || 0;
   });
+  $("#scan-evidence-count").textContent = verdictCounts.ALL;
 }
 
 function applyVerdictFilter() {
@@ -199,9 +261,11 @@ document.querySelectorAll("[data-verdict-filter]").forEach((button) => {
 $("#q").addEventListener("submit", (e) => {
   e.preventDefault();
   if (es) es.close();
-  resetResults();
   const { params } = formParams();
   if ([...params].length === 0) { setScanStatus("Enter a starting point.", "error"); return; }
+  resetResults();
+  beginResearchRoom();
+  setScanStage("activity");
   $("#go").disabled = true;
   setScanStatus("Researching…", "busy");
   setLiveGraphStatus("Streaming", "busy");
@@ -215,6 +279,7 @@ $("#q").addEventListener("submit", (e) => {
       liveScanFinished = true;
       setScanStatus("The live stream returned invalid data.", "error");
       failLiveGraph("Invalid stream data");
+      desktopNotify("Investigation failed", "The live stream returned invalid data.", "error");
       $("#go").disabled = false;
       es.close();
       return;
@@ -231,12 +296,15 @@ $("#q").addEventListener("submit", (e) => {
       liveScanFinished = true;
       setScanStatus(`Done — ${ev.hits}/${ev.total} confirmed.`, "success");
       finishLiveGraph();
+      setScanStage("evidence");
+      desktopNotify("Investigation complete", `${ev.hits}/${ev.total} findings confirmed.`);
       $("#go").disabled = false;
       es.close();
     } else if (ev.type === "error") {
       liveScanFinished = true;
       setScanStatus("Error: " + ev.message, "error");
       failLiveGraph(ev.message);
+      desktopNotify("Investigation failed", ev.message, "error");
       $("#go").disabled = false;
       es.close();
     }
@@ -246,6 +314,7 @@ $("#q").addEventListener("submit", (e) => {
     liveScanFinished = true;
     setScanStatus("Live scan disconnected.", "error");
     failLiveGraph("Stream disconnected");
+    desktopNotify("Investigation interrupted", "The live scan disconnected.", "warning");
     $("#go").disabled = false;
     es.close();
   };
@@ -299,6 +368,8 @@ $("#save").addEventListener("click", async () => {
   liveScanFinished = true;
   if (es) es.close();
   resetResults();
+  beginResearchRoom();
+  setScanStage("activity");
   const button = $("#save");
   button.disabled = true;
   try {
@@ -306,26 +377,36 @@ $("#save").addEventListener("click", async () => {
     setLiveGraphStatus("Running", "busy");
     const r = await fetch("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) });
     const d = await r.json();
-    if (!r.ok) { setScanStatus(d.detail || d.error || "Scan could not start.", "error"); return; }
+    if (!r.ok) {
+      const message = d.detail || d.error || "Scan could not start.";
+      setScanStatus(message, "error");
+      desktopNotify("Investigation failed", message, "error");
+      return;
+    }
     if (r.status === 202) {
       renderIntake(d.intake);
       setScanStatus(`Queued scan #${d.job_id}`, "busy");
       const job = await waitForJob(d.job_id);
       const hits = (job.stats || {}).hits || 0;
       setScanStatus(`Saved run #${job.run_id}: ${hits} confirmed.`, "success");
+      desktopNotify("Investigation saved", `Run #${job.run_id}: ${hits} findings confirmed.`);
       renderProfile((job.stats || {}).profile);
       renderReasoning((job.stats || {}).reasoning, "#live-reasoning");
+      setScanStage("evidence");
       return;
     }
     renderIntake(d.intake);
     setScanStatus(`Saved run #${d.run_id}: ${d.hits} confirmed, ${d.summary.identities} identities, ${d.changes.length} change(s).`, "success");
+    desktopNotify("Investigation saved", `Run #${d.run_id}: ${d.hits} findings confirmed.`);
     for (const activity of d.activity || []) ingestLiveActivity(activity);
     finishLiveGraph();
     renderSummary(d.summary);
     renderReasoning(d.reasoning, "#live-reasoning");
+    setScanStage("evidence");
   } catch (error) {
     setScanStatus(`Scan failed: ${error.message}`, "error");
     failLiveGraph(error.message);
+    desktopNotify("Investigation failed", error.message, "error");
   } finally {
     button.disabled = false;
   }
@@ -699,14 +780,185 @@ const LIVE_KIND_STROKES = {
   artifact: "#9cc5ff", process: "#d2b9f4", request: "#c3c6c0", finding: "#f0f1ed",
 };
 const reducedGraphMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const RESEARCH_PHASES = ["understand", "discover", "connect", "verify", "synthesize"];
+const researchState = {
+  phaseIndex: -1,
+  confirmed: 0,
+  open: 0,
+  leads: 0,
+  feedKeys: new Set(),
+  mode: "focus",
+  milestoneTimer: null,
+  autoFitTimer: null,
+};
 const liveGraph = {
   nodes: new Map(), edges: new Map(), roots: 0,
   width: 0, height: 0, dpr: 1,
   view: { scale: 1, ox: 0, oy: 0 },
+  viewTarget: null,
   alpha: 0, raf: null, paused: false, active: false,
   hoverId: null, selectedId: null, keyboardIndex: -1,
   dragNode: null, panning: false, pointerStart: null, panStart: null,
+  followedId: null, visibleIds: null, userInteracted: false,
 };
+
+function humanizeResearchValue(value) {
+  const text = String(value || "").replaceAll("_", " ").replaceAll("-", " ").trim();
+  return text ? text.replace(/\b\w/g, letter => letter.toUpperCase()) : "Source";
+}
+
+function setResearchNow(kicker, title, detail, tone = "busy") {
+  $("#research-now-kicker").textContent = kicker;
+  $("#research-now-title").textContent = title;
+  $("#research-now-detail").textContent = detail;
+  $(".research-now").dataset.tone = tone;
+}
+
+function setResearchPhase(phase) {
+  const nextIndex = RESEARCH_PHASES.indexOf(phase);
+  if (nextIndex < 0 || nextIndex < researchState.phaseIndex) return;
+  researchState.phaseIndex = nextIndex;
+  document.querySelectorAll("[data-research-phase]").forEach((item, index) => {
+    item.classList.toggle("complete", index < nextIndex);
+    item.classList.toggle("current", index === nextIndex);
+    if (index === nextIndex) item.setAttribute("aria-current", "step");
+    else item.removeAttribute("aria-current");
+  });
+}
+
+function showResearchMilestone(message, tone = "success") {
+  const milestone = $("#research-milestone");
+  clearTimeout(researchState.milestoneTimer);
+  milestone.hidden = false;
+  milestone.dataset.tone = tone;
+  milestone.textContent = message;
+  milestone.classList.remove("arrive");
+  void milestone.offsetWidth;
+  milestone.classList.add("arrive");
+  researchState.milestoneTimer = setTimeout(() => { milestone.hidden = true; }, 3200);
+}
+
+function setResearchMode(mode) {
+  if (!['focus', 'explore'].includes(mode)) return;
+  researchState.mode = mode;
+  $("#research-room").dataset.mode = mode;
+  document.querySelectorAll("[data-research-mode]").forEach((button) => {
+    const selected = button.dataset.researchMode === mode;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  requestAnimationFrame(() => { sizeLiveCanvas(); fitLiveGraph(); });
+}
+
+document.querySelectorAll("[data-research-mode]").forEach((button) => {
+  button.addEventListener("click", () => setResearchMode(button.dataset.researchMode));
+});
+
+function researchActivityCopy(activity) {
+  const parent = liveGraph.nodes.get(activity.parent_id);
+  const source = humanizeResearchValue(activity.module || activity.source);
+  const subject = activity.artifact_label || parent?.artifact_label || parent?.label;
+  const type = humanizeResearchValue(activity.artifact_type || activity.category || "lead");
+  const outcome = liveOutcome(activity);
+
+  if (activity.phase === "seeded") return {
+    phase: "understand", kicker: "Starting clue",
+    title: `${type} understood`, detail: `${activity.label} is the root of this investigation.`,
+    tone: "busy",
+  };
+  if (activity.kind === "process" && activity.status === "running") return {
+    phase: parent?.depth > 0 ? "connect" : "discover", kicker: "Choosing the next step",
+    title: `Checking ${subject || type}`, detail: `${source} was selected to look for a useful connection.`,
+    tone: "busy",
+  };
+  if (activity.kind === "request" && activity.status === "running") return {
+    phase: "discover", kicker: "Contacting a public source",
+    title: `Searching ${activity.host || "source"}`, detail: `Specter is waiting for a response to this ${activity.method || "web"} request.`,
+    tone: "busy",
+  };
+  if (activity.kind === "request") return {
+    phase: "discover", kicker: outcome === "success" ? "Source responded" : "Source checked",
+    title: `${activity.host || "Source"} ${outcome === "success" ? "responded" : liveOutcomeLabel(activity).toLowerCase()}`,
+    detail: activity.elapsed_ms == null
+      ? "The response is being interpreted before it becomes evidence."
+      : `The request finished in ${activity.elapsed_ms} ms and is being interpreted.`,
+    tone: outcome === "error" ? "error" : outcome === "uncertain" ? "warning" : "busy",
+  };
+  if (activity.kind === "artifact" && activity.phase === "discovered") return {
+    phase: "connect", kicker: "New lead",
+    title: `${type} discovered`, detail: `${activity.label} can extend the investigation into another branch.`,
+    tone: "success",
+  };
+  if (activity.kind === "finding") {
+    const isConfirmed = outcome === "success";
+    const isOpen = ["uncertain", "unverifiable"].includes(outcome);
+    return {
+      phase: "verify",
+      kicker: isConfirmed ? "Evidence confirmed" : isOpen ? "Evidence needs review" : "Check resolved",
+      title: isConfirmed ? `${source} supports a finding` : `${source}: ${liveOutcomeLabel(activity)}`,
+      detail: activity.reason || `${activity.label || type} was evaluated against the available evidence.`,
+      tone: isConfirmed ? "success" : isOpen ? "warning" : outcome === "error" ? "error" : "neutral",
+    };
+  }
+  return {
+    phase: parent?.depth > 0 ? "connect" : "discover", kicker: "Check complete",
+    title: `${source} finished`, detail: subject
+      ? `${subject} produced ${activity.findings || 0} finding(s) and ${activity.artifacts || 0} new lead(s).`
+      : "Specter is selecting the next useful branch.",
+    tone: outcome === "error" ? "error" : outcome === "uncertain" ? "warning" : "busy",
+  };
+}
+
+function addDiscoveryEntry(activity, copy) {
+  const outcome = liveOutcome(activity);
+  const journaled = (
+    (activity.kind === "artifact" && activity.phase === "discovered")
+    || activity.kind === "finding"
+    || (activity.kind === "request" && ["uncertain", "error"].includes(outcome))
+  );
+  const key = `${activity.id}:${activity.phase}:${outcome}`;
+  if (!journaled || researchState.feedKeys.has(key)) return;
+  researchState.feedKeys.add(key);
+  $("#discovery-feed-empty").hidden = true;
+
+  if (activity.kind === "finding" && outcome === "success") researchState.confirmed += 1;
+  if (activity.kind === "finding" && ["uncertain", "unverifiable"].includes(outcome)) researchState.open += 1;
+  if (activity.kind === "artifact" && activity.phase === "discovered") researchState.leads += 1;
+  $("#discovery-confirmed").textContent = researchState.confirmed;
+  $("#discovery-open").textContent = researchState.open;
+
+  const item = document.createElement("li");
+  item.className = `discovery-entry ${copy.tone}`;
+  const button = document.createElement("button");
+  button.type = "button";
+  const marker = document.createElement("span"); marker.className = "discovery-marker";
+  const body = document.createElement("span"); body.className = "discovery-copy";
+  const title = document.createElement("strong"); title.textContent = copy.title;
+  const detail = document.createElement("span"); detail.textContent = copy.detail;
+  const meta = document.createElement("small");
+  meta.textContent = `${humanizeResearchValue(activity.kind)} · ${liveOutcomeLabel(activity)}`;
+  body.append(title, detail, meta); button.append(marker, body); item.appendChild(button);
+  button.addEventListener("click", () => {
+    setResearchMode("explore");
+    requestAnimationFrame(() => focusLiveNode(liveGraph.nodes.get(activity.id)));
+  });
+  const feed = $("#discovery-feed");
+  feed.insertBefore(item, feed.firstChild);
+  const entries = [...feed.querySelectorAll(".discovery-entry")];
+  if (entries.length > 40) entries.at(-1).remove();
+
+  if (researchState.leads === 1)
+    showResearchMilestone("First new lead discovered");
+  if ([1, 3, 5, 10].includes(researchState.confirmed))
+    showResearchMilestone(`${researchState.confirmed} finding${researchState.confirmed === 1 ? "" : "s"} confirmed`);
+}
+
+function updateResearchStory(activity) {
+  const copy = researchActivityCopy(activity);
+  setResearchPhase(copy.phase);
+  setResearchNow(copy.kicker, copy.title, copy.detail, copy.tone);
+  addDiscoveryEntry(activity, copy);
+}
 
 function setLiveGraphStatus(message, tone = "neutral") {
   const status = $("#live-graph-status");
@@ -719,7 +971,9 @@ function liveOutcome(node) {
   if (node.phase === "seeded") return "input";
   if (node.status === "running") return "running";
   const value = String(node.outcome || node.verdict || "").toLowerCase();
-  return Object.hasOwn(LIVE_COLORS, value) ? value : "running";
+  const aliases = { found: "success" };
+  const normalized = aliases[value] || value;
+  return Object.hasOwn(LIVE_COLORS, normalized) ? normalized : "running";
 }
 
 function liveOutcomeLabel(node) {
@@ -797,23 +1051,33 @@ function placeLiveNode(node) {
 function ingestLiveActivity(activity) {
   if (!activity || !activity.id || !activity.kind) return;
   let node = liveGraph.nodes.get(activity.id);
+  const isNew = !node;
   if (!node) {
-    node = { ...activity };
+    node = { ...activity, bornAt: performance.now() };
     placeLiveNode(node);
     liveGraph.nodes.set(node.id, node);
   } else if (!node.sequence || activity.sequence >= node.sequence) {
     Object.assign(node, activity);
   }
   if (node.parent_id && liveGraph.nodes.has(node.parent_id)) {
-    liveGraph.edges.set(`${node.parent_id}>${node.id}`, {
-      source: node.parent_id, target: node.id,
-    });
+    const edgeKey = `${node.parent_id}>${node.id}`;
+    if (!liveGraph.edges.has(edgeKey)) {
+      liveGraph.edges.set(edgeKey, {
+        source: node.parent_id, target: node.id, bornAt: performance.now(),
+      });
+    }
   }
   liveGraph.active = true;
   liveGraph.alpha = Math.max(liveGraph.alpha, reducedGraphMotion.matches ? 0.12 : 0.8);
   $("#live-graph-empty").hidden = true;
   updateLiveGraphCounts();
+  updateResearchStory(node);
   if (liveGraph.selectedId === node.id || liveGraph.hoverId === node.id) renderLiveDetail(node);
+  if (liveGraph.followedId) updateFollowedBranch();
+  if (isNew && researchState.mode === "focus" && !liveGraph.userInteracted) {
+    clearTimeout(researchState.autoFitTimer);
+    researchState.autoFitTimer = setTimeout(() => fitLiveGraph(), 260);
+  }
   scheduleLiveGraph();
 }
 
@@ -827,6 +1091,7 @@ function updateLiveGraphCounts() {
   $("#live-count-processes").textContent = processes;
   $("#live-count-requests").textContent = requests;
   $("#live-count-findings").textContent = findings;
+  $("#scan-activity-count").textContent = liveGraph.nodes.size;
 }
 
 function tickLiveGraph() {
@@ -883,9 +1148,35 @@ function tickLiveGraph() {
   liveGraph.alpha *= reducedGraphMotion.matches ? 0.72 : 0.975;
 }
 
-function drawLiveNode(ctx, node, x, y) {
+function tickLiveView() {
+  if (!liveGraph.viewTarget) return;
+  if (reducedGraphMotion.matches) {
+    liveGraph.view = { ...liveGraph.viewTarget };
+    liveGraph.viewTarget = null;
+    return;
+  }
+  const target = liveGraph.viewTarget;
+  const factor = 0.16;
+  liveGraph.view.scale += (target.scale - liveGraph.view.scale) * factor;
+  liveGraph.view.ox += (target.ox - liveGraph.view.ox) * factor;
+  liveGraph.view.oy += (target.oy - liveGraph.view.oy) * factor;
+  if (Math.abs(target.scale - liveGraph.view.scale) < 0.002
+      && Math.abs(target.ox - liveGraph.view.ox) < 0.5
+      && Math.abs(target.oy - liveGraph.view.oy) < 0.5) {
+    liveGraph.view = { ...target };
+    liveGraph.viewTarget = null;
+  }
+}
+
+function drawLiveNode(ctx, node, x, y, now) {
   const selected = node.id === liveGraph.selectedId || node.id === liveGraph.hoverId;
-  const radius = node.phase === "seeded" ? 8 : node.kind === "process" ? 7 : 5.5;
+  const age = Math.max(0, now - (node.bornAt || 0));
+  const entrance = reducedGraphMotion.matches ? 1 : Math.min(1, age / 360);
+  const easedEntrance = 1 - (1 - entrance) ** 3;
+  const baseRadius = node.phase === "seeded" ? 8 : node.kind === "process" ? 7 : 5.5;
+  const radius = baseRadius * easedEntrance;
+  const dimmed = liveGraph.visibleIds && !liveGraph.visibleIds.has(node.id);
+  ctx.globalAlpha = dimmed ? 0.1 : 1;
   ctx.beginPath();
   if (node.kind === "process") {
     ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
@@ -901,9 +1192,19 @@ function drawLiveNode(ctx, node, x, y) {
   ctx.strokeStyle = selected ? "#ffffff" : LIVE_KIND_STROKES[node.kind] || "#c3c6c0";
   ctx.stroke();
   if (node.status === "running") {
-    ctx.beginPath(); ctx.arc(x, y, radius + 4, 0, Math.PI * 2);
+    const pulse = reducedGraphMotion.matches ? 0 : (Math.sin(now / 250) + 1) * 1.8;
+    ctx.beginPath(); ctx.arc(x, y, radius + 4 + pulse, 0, Math.PI * 2);
     ctx.strokeStyle = "rgba(115,170,245,.42)"; ctx.lineWidth = 1; ctx.stroke();
   }
+  if (selected || node.phase === "seeded" || (node.kind === "finding" && liveOutcome(node) === "success")) {
+    const label = liveNodeTitle(node);
+    const shortLabel = label.length > 28 ? `${label.slice(0, 27)}…` : label;
+    ctx.font = "600 10px system-ui, sans-serif";
+    ctx.fillStyle = selected ? "#f4f6f2" : "rgba(220,224,218,.72)";
+    ctx.textBaseline = "middle";
+    ctx.fillText(shortLabel, x + radius + 7, y);
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawLiveGraph() {
@@ -912,39 +1213,57 @@ function drawLiveGraph() {
   const { width, height, dpr } = liveGraph;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
+  const now = performance.now();
   ctx.lineWidth = 1;
-  ctx.strokeStyle = "rgba(155,159,154,.19)";
   for (const edge of liveGraph.edges.values()) {
     const source = liveGraph.nodes.get(edge.source), target = liveGraph.nodes.get(edge.target);
     if (!source || !target) continue;
     const [sx, sy] = liveToScreen(source), [tx, ty] = liveToScreen(target);
     if ((sx < 0 && tx < 0) || (sx > width && tx > width) ||
         (sy < 0 && ty < 0) || (sy > height && ty > height)) continue;
+    const dimmed = liveGraph.visibleIds
+      && (!liveGraph.visibleIds.has(source.id) || !liveGraph.visibleIds.has(target.id));
+    ctx.globalAlpha = dimmed ? 0.06 : 1;
+    ctx.strokeStyle = "rgba(155,159,154,.23)";
     ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(tx, ty); ctx.stroke();
+    if (!dimmed && !reducedGraphMotion.matches
+        && (target.status === "running" || now - edge.bornAt < 1100)) {
+      const progress = ((now / 1050) + ((target.sequence || 0) * 0.17)) % 1;
+      const px = sx + (tx - sx) * progress, py = sy + (ty - sy) * progress;
+      ctx.beginPath(); ctx.arc(px, py, 2.1, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(156,197,255,.9)"; ctx.fill();
+    }
   }
+  ctx.globalAlpha = 1;
   for (const node of liveGraph.nodes.values()) {
     const [x, y] = liveToScreen(node);
     if (x < -20 || y < -20 || x > width + 20 || y > height + 20) continue;
-    drawLiveNode(ctx, node, x, y);
+    drawLiveNode(ctx, node, x, y, now);
   }
 }
 
 function liveGraphFrame() {
   liveGraph.raf = null;
   tickLiveGraph();
+  tickLiveView();
   drawLiveGraph();
-  if (!liveGraph.paused && liveGraph.alpha >= 0.008) scheduleLiveGraph();
+  const flowing = liveGraph.active && !reducedGraphMotion.matches;
+  if (!liveGraph.paused && (liveGraph.alpha >= 0.008 || liveGraph.viewTarget || flowing))
+    scheduleLiveGraph();
 }
 
 function scheduleLiveGraph() {
   if (liveGraph.raf == null) liveGraph.raf = requestAnimationFrame(liveGraphFrame);
 }
 
-function fitLiveGraph() {
+function fitLiveGraph({ immediate = false } = {}) {
   sizeLiveCanvas();
-  const nodes = [...liveGraph.nodes.values()];
+  const nodes = [...liveGraph.nodes.values()].filter(
+    node => !liveGraph.visibleIds || liveGraph.visibleIds.has(node.id)
+  );
   if (!nodes.length) {
     liveGraph.view = { scale: 1, ox: liveGraph.width / 2, oy: liveGraph.height / 2 };
+    liveGraph.viewTarget = null;
     drawLiveGraph();
     return;
   }
@@ -958,10 +1277,87 @@ function fitLiveGraph() {
       (liveGraph.height - 70) / Math.max(70, maxY - minY),
     )),
   );
-  liveGraph.view.scale = scale;
-  liveGraph.view.ox = liveGraph.width / 2 - ((minX + maxX) / 2) * scale;
-  liveGraph.view.oy = liveGraph.height / 2 - ((minY + maxY) / 2) * scale;
-  drawLiveGraph();
+  const target = {
+    scale,
+    ox: liveGraph.width / 2 - ((minX + maxX) / 2) * scale,
+    oy: liveGraph.height / 2 - ((minY + maxY) / 2) * scale,
+  };
+  if (immediate || reducedGraphMotion.matches) {
+    liveGraph.view = target;
+    liveGraph.viewTarget = null;
+    drawLiveGraph();
+  } else {
+    liveGraph.viewTarget = target;
+    scheduleLiveGraph();
+  }
+}
+
+function updateFollowedBranch() {
+  if (!liveGraph.followedId || !liveGraph.nodes.has(liveGraph.followedId)) {
+    liveGraph.visibleIds = null;
+    return;
+  }
+  const visible = new Set([liveGraph.followedId]);
+  let current = liveGraph.nodes.get(liveGraph.followedId);
+  while (current?.parent_id && liveGraph.nodes.has(current.parent_id)) {
+    visible.add(current.parent_id);
+    current = liveGraph.nodes.get(current.parent_id);
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of liveGraph.nodes.values()) {
+      if (node.parent_id && visible.has(node.parent_id) && !visible.has(node.id)) {
+        visible.add(node.id);
+        changed = true;
+      }
+    }
+  }
+  liveGraph.visibleIds = visible;
+}
+
+function focusLiveNode(node) {
+  if (!node) return;
+  liveGraph.selectedId = node.id;
+  renderLiveDetail(node);
+  sizeLiveCanvas();
+  const scale = Math.max(1, Math.min(1.45, liveGraph.view.scale));
+  liveGraph.viewTarget = {
+    scale,
+    ox: liveGraph.width / 2 - node.x * scale,
+    oy: liveGraph.height / 2 - node.y * scale,
+  };
+  scheduleLiveGraph();
+  $("#live-graph-canvas").focus({ preventScroll: true });
+}
+
+function liveConnectionPath(node) {
+  const path = [];
+  const visited = new Set();
+  let current = node;
+  while (current && !visited.has(current.id)) {
+    path.unshift(liveNodeTitle(current));
+    visited.add(current.id);
+    current = current.parent_id ? liveGraph.nodes.get(current.parent_id) : null;
+  }
+  return path;
+}
+
+function explainLiveConnection(node) {
+  const parent = node.parent_id ? liveGraph.nodes.get(node.parent_id) : null;
+  const path = liveConnectionPath(node);
+  const root = path[0] || "the starting clue";
+  if (!parent) return "This is a starting clue supplied for the investigation.";
+  if (node.kind === "request") {
+    return `Specter contacted ${node.host || "this website"} because ${humanizeResearchValue(parent.module)} was checking ${parent.artifact_label || root}.`;
+  }
+  if (node.kind === "finding") {
+    return `${humanizeResearchValue(node.source || parent.module)} evaluated ${parent.artifact_label || root} and produced this evidence. The branch began with ${root}.`;
+  }
+  if (node.kind === "artifact") {
+    return `${humanizeResearchValue(node.module || parent.module)} discovered ${node.label} while checking ${parent.artifact_label || root}, so Specter opened a new research branch.`;
+  }
+  return `Specter selected ${humanizeResearchValue(node.module)} to examine ${node.artifact_label || root}. This check descends from ${root}.`;
 }
 
 function appendLiveDetailField(list, label, value, link = false) {
@@ -1008,7 +1404,38 @@ function renderLiveDetail(node) {
   appendLiveDetailField(list, "Findings", node.findings);
   appendLiveDetailField(list, "Artifacts", node.artifacts);
   appendLiveDetailField(list, "Reason", node.reason || node.error);
-  detail.append(kicker, heading, list);
+  const actions = document.createElement("div"); actions.className = "graph-detail-actions";
+  const follow = document.createElement("button"); follow.type = "button"; follow.className = "quiet-action";
+  follow.textContent = liveGraph.followedId === node.id ? "Show all branches" : "Follow this branch";
+  follow.addEventListener("click", () => {
+    liveGraph.followedId = liveGraph.followedId === node.id ? null : node.id;
+    updateFollowedBranch();
+    renderLiveDetail(node);
+    fitLiveGraph();
+  });
+  const explain = document.createElement("button"); explain.type = "button"; explain.className = "quiet-action";
+  explain.textContent = "Explain connection";
+  const explanation = document.createElement("div"); explanation.className = "connection-explanation";
+  explanation.hidden = true;
+  explanation.textContent = explainLiveConnection(node);
+  explain.addEventListener("click", () => {
+    explanation.hidden = !explanation.hidden;
+    explain.setAttribute("aria-expanded", String(!explanation.hidden));
+  });
+  actions.append(follow, explain);
+  if (["artifact", "finding"].includes(node.kind) && node.label) {
+    const reuse = document.createElement("button"); reuse.type = "button"; reuse.className = "quiet-action";
+    reuse.textContent = "Use as starting point";
+    reuse.addEventListener("click", () => {
+      const input = document.querySelector("#q [name='subject']");
+      input.value = node.label;
+      setScanStage("start");
+      input.focus();
+      setScanStatus("Lead prepared as a new starting point.", "neutral");
+    });
+    actions.appendChild(reuse);
+  }
+  detail.append(kicker, heading, list, actions, explanation);
 }
 
 function showLiveTooltip(node, x, y) {
@@ -1042,28 +1469,62 @@ function inspectLiveNode(node, { selected = false } = {}) {
 
 function resetLiveGraph() {
   if (!$("#live-graph-canvas")) return;
+  clearTimeout(researchState.autoFitTimer);
+  clearTimeout(researchState.milestoneTimer);
   liveGraph.nodes.clear(); liveGraph.edges.clear(); liveGraph.roots = 0;
   liveGraph.alpha = 0; liveGraph.active = false; liveGraph.hoverId = null;
   liveGraph.selectedId = null; liveGraph.keyboardIndex = -1;
   liveGraph.dragNode = null; liveGraph.panning = false;
   liveGraph.view = { scale: 1, ox: 0, oy: 0 };
+  liveGraph.viewTarget = null; liveGraph.followedId = null; liveGraph.visibleIds = null;
+  liveGraph.userInteracted = false;
   liveGraph.paused = false;
+  researchState.phaseIndex = -1; researchState.confirmed = 0; researchState.open = 0;
+  researchState.leads = 0;
+  researchState.feedKeys.clear();
   $("#live-graph-pause").textContent = "Pause";
   $("#live-graph-pause").setAttribute("aria-pressed", "false");
   $("#live-graph-empty").hidden = false;
   $("#live-graph-tooltip").hidden = true;
+  $("#research-milestone").hidden = true;
+  $("#discovery-confirmed").textContent = "0";
+  $("#discovery-open").textContent = "0";
+  document.querySelectorAll("#discovery-feed .discovery-entry").forEach(item => item.remove());
+  $("#discovery-feed-empty").hidden = false;
+  document.querySelectorAll("[data-research-phase]").forEach((item) => {
+    item.classList.remove("complete", "current"); item.removeAttribute("aria-current");
+  });
+  setResearchNow("Ready", "Waiting for a starting point",
+    "Specter will explain each meaningful step as the investigation develops.", "neutral");
   updateLiveGraphCounts(); renderLiveDetail(null); setLiveGraphStatus("Idle"); drawLiveGraph();
+}
+
+function beginResearchRoom() {
+  setResearchPhase("understand");
+  setResearchNow("Preparing", "Understanding the starting clue",
+    "Specter is classifying the input before choosing which public sources to contact.", "busy");
 }
 
 function finishLiveGraph() {
   liveGraph.active = false;
   setLiveGraphStatus("Complete", "success");
+  setResearchPhase("synthesize");
+  document.querySelectorAll("[data-research-phase]").forEach((item) => {
+    item.classList.add("complete"); item.classList.remove("current");
+    item.removeAttribute("aria-current");
+  });
+  setResearchNow("Investigation complete", "The profile is ready",
+    `${researchState.confirmed} confirmed finding(s) and ${researchState.open} item(s) for review were recorded.`,
+    "success");
+  showResearchMilestone("Research complete");
   setTimeout(fitLiveGraph, 80);
 }
 
 function failLiveGraph(message) {
   liveGraph.active = false;
   setLiveGraphStatus(message || "Failed", "error");
+  setResearchNow("Investigation interrupted", "Specter could not continue",
+    message || "The current research stream stopped unexpectedly.", "error");
   drawLiveGraph();
 }
 
@@ -1073,6 +1534,8 @@ liveCanvas.addEventListener("pointerdown", (event) => {
   const x = event.clientX - rect.left, y = event.clientY - rect.top;
   const node = pickLiveNode(x, y);
   liveCanvas.setPointerCapture(event.pointerId);
+  liveGraph.userInteracted = true;
+  liveGraph.viewTarget = null;
   liveGraph.pointerStart = [x, y];
   if (node) {
     liveGraph.dragNode = node;
@@ -1122,6 +1585,8 @@ liveCanvas.addEventListener("pointerleave", () => {
 
 liveCanvas.addEventListener("wheel", (event) => {
   event.preventDefault();
+  liveGraph.userInteracted = true;
+  liveGraph.viewTarget = null;
   const rect = liveCanvas.getBoundingClientRect();
   const x = event.clientX - rect.left, y = event.clientY - rect.top;
   const [wx, wy] = liveToWorld(x, y);
@@ -1155,6 +1620,7 @@ $("#live-graph-pause").addEventListener("click", (event) => {
   event.currentTarget.textContent = liveGraph.paused ? "Resume" : "Pause";
   event.currentTarget.setAttribute("aria-pressed", String(liveGraph.paused));
   if (!liveGraph.paused) { liveGraph.alpha = Math.max(liveGraph.alpha, 0.16); scheduleLiveGraph(); }
+  else drawLiveGraph();
 });
 
 let liveResizeTimer = null;

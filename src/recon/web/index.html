@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>New investigation - Specter</title>
-  <link rel="stylesheet" href="/static/style.css?v=2c54ce13b808" />
+  <link rel="stylesheet" href="/static/style.css?v=4b41267885b8" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to workspace</a>
@@ -49,34 +49,35 @@
       </div>
 
       <nav id="tabs" aria-label="Workspace navigation">
-        <div class="nav-group">
-          <p>Workspace</p>
-          <button type="button" data-tab="search" data-role="scan" data-title="New investigation" data-context="Workspace" class="active" aria-current="page">Search</button>
-          <button type="button" data-tab="investigations" data-title="Investigations" data-context="Workspace">Investigations</button>
-          <button type="button" data-tab="review" data-title="Evidence review" data-context="Workspace">Review</button>
-          <button type="button" data-tab="timeline" data-title="Change timeline" data-context="Workspace">Timeline</button>
-        </div>
-        <div class="nav-group">
-          <p>Analysis</p>
-          <button type="button" data-tab="graph" data-title="Identity graph" data-context="Analysis">Identity graph</button>
-          <button type="button" data-tab="map" data-title="Discovery map" data-context="Analysis">Discovery map</button>
-          <button type="button" data-tab="insights" data-title="Insights" data-context="Analysis">Insights</button>
-          <button type="button" data-tab="reasoning" data-title="Investigation reasoning" data-context="Analysis">Reasoning</button>
-          <button type="button" data-tab="confidence" data-role="review" data-title="Confidence analytics" data-context="Analysis">Confidence</button>
-        </div>
-        <div class="nav-group">
-          <p>Operations</p>
-          <button type="button" data-tab="sources" data-title="Source health" data-context="Operations">Source health</button>
-          <button type="button" data-tab="keys" data-role="admin" data-title="Modules and keys" data-context="Operations">Modules &amp; keys</button>
-          <button type="button" data-tab="governance" data-role="admin" data-title="Data governance" data-context="Operations">Governance</button>
-          <button type="button" data-tab="administration" data-role="admin" data-title="Administration" data-context="Operations">Administration</button>
-        </div>
+        <details class="nav-curtain" open>
+          <summary>Workspace</summary>
+          <div class="nav-items">
+            <button type="button" data-tab="search" data-role="scan" data-title="New investigation" data-context="Workspace" class="active" aria-current="page">Search</button>
+            <button type="button" data-tab="investigations" data-title="Investigations" data-context="Workspace">Investigations</button>
+            <button type="button" data-tab="review" data-title="Evidence review" data-context="Workspace">Review</button>
+            <button type="button" data-tab="timeline" data-title="Change timeline" data-context="Workspace">Timeline</button>
+          </div>
+        </details>
+        <details class="nav-curtain">
+          <summary>Analysis</summary>
+          <div class="nav-items">
+            <button type="button" data-tab="graph" data-title="Identity graph" data-context="Analysis">Identity graph</button>
+            <button type="button" data-tab="map" data-title="Discovery map" data-context="Analysis">Discovery map</button>
+            <button type="button" data-tab="insights" data-title="Insights" data-context="Analysis">Insights</button>
+            <button type="button" data-tab="reasoning" data-title="Investigation reasoning" data-context="Analysis">Reasoning</button>
+            <button type="button" data-tab="confidence" data-role="review" data-title="Confidence analytics" data-context="Analysis">Confidence</button>
+          </div>
+        </details>
+        <details class="nav-curtain">
+          <summary>Operations</summary>
+          <div class="nav-items">
+            <button type="button" data-tab="sources" data-title="Source health" data-context="Operations">Source health</button>
+            <button type="button" data-tab="keys" data-role="admin" data-title="Modules and keys" data-context="Operations">Modules &amp; keys</button>
+            <button type="button" data-tab="governance" data-role="admin" data-title="Data governance" data-context="Operations">Governance</button>
+            <button type="button" data-tab="administration" data-role="admin" data-title="Administration" data-context="Operations">Administration</button>
+          </div>
+        </details>
       </nav>
-
-      <div class="sidebar-meta">
-        <div><span>Storage</span><strong>Local</strong></div>
-        <div><span>Collection</span><strong>Networked</strong></div>
-      </div>
     </aside>
 
     <div class="app-main">
@@ -95,7 +96,13 @@
       <main id="main-content" tabindex="-1">
         <section class="panel active" id="panel-search" aria-labelledby="search-heading">
           <h2 id="search-heading" class="sr-only">New investigation</h2>
-          <form id="q" class="scan-tool" autocomplete="off">
+          <div class="scan-stage-tabs" role="tablist" aria-label="Investigation workspace">
+            <button type="button" id="scan-view-start" data-scan-view="start" role="tab" aria-selected="true" aria-controls="q" class="active">Start</button>
+            <button type="button" id="scan-view-activity" data-scan-view="activity" role="tab" aria-selected="false" aria-controls="scan-stage-activity">Activity <span id="scan-activity-count" class="stage-count">0</span></button>
+            <button type="button" id="scan-view-evidence" data-scan-view="evidence" role="tab" aria-selected="false" aria-controls="scan-stage-evidence">Evidence <span id="scan-evidence-count" class="stage-count">0</span></button>
+          </div>
+
+          <form id="q" class="scan-tool scan-stage active" data-scan-stage="start" role="tabpanel" aria-labelledby="scan-view-start" autocomplete="off">
             <fieldset class="subject-entry">
               <legend>Starting point</legend>
               <div class="subject-row">
@@ -124,11 +131,11 @@
             </div>
           </form>
 
-          <section class="execution-workspace" aria-labelledby="live-graph-heading">
+          <section id="scan-stage-activity" class="execution-workspace scan-stage" data-scan-stage="activity" role="tabpanel" aria-labelledby="scan-view-activity" hidden>
             <div class="execution-header">
               <div>
-                <span class="eyebrow">Current scan</span>
-                <h3 id="live-graph-heading">Execution graph</h3>
+                <span class="eyebrow">Live investigation</span>
+                <h3 id="live-graph-heading">Research room</h3>
               </div>
               <div class="execution-metrics" aria-label="Live activity totals">
                 <span><strong id="live-count-processes">0</strong> processes</span>
@@ -137,27 +144,72 @@
               </div>
               <div class="execution-actions">
                 <span id="live-graph-status" class="status-text" role="status" aria-live="polite">Idle</span>
+                <div class="research-mode-switch" role="group" aria-label="Research room view">
+                  <button type="button" class="active" data-research-mode="focus" aria-pressed="true">Focus</button>
+                  <button type="button" data-research-mode="explore" aria-pressed="false">Explore</button>
+                </div>
                 <button type="button" id="live-graph-fit" class="quiet-action">Center</button>
                 <button type="button" id="live-graph-pause" class="quiet-action" aria-pressed="false">Pause</button>
               </div>
             </div>
-            <div class="execution-legend" aria-label="Execution graph legend">
-              <span><i class="input-node"></i>Input</span>
-              <span><i class="running-node"></i>Running</span>
-              <span><i class="success-node"></i>Successful</span>
-              <span><i class="uncertain-node"></i>Uncertain</span>
-              <span><i class="not-found-node"></i>Not found / error</span>
+
+            <ol id="research-phases" class="research-phases" aria-label="Investigation phases">
+              <li data-research-phase="understand"><span>1</span><strong>Understand</strong><small>Interpret the input</small></li>
+              <li data-research-phase="discover"><span>2</span><strong>Discover</strong><small>Find initial leads</small></li>
+              <li data-research-phase="connect"><span>3</span><strong>Connect</strong><small>Expand relationships</small></li>
+              <li data-research-phase="verify"><span>4</span><strong>Verify</strong><small>Check the evidence</small></li>
+              <li data-research-phase="synthesize"><span>5</span><strong>Synthesize</strong><small>Build the profile</small></li>
+            </ol>
+
+            <section class="research-now" aria-labelledby="research-now-title">
+              <span class="research-now-signal" aria-hidden="true"></span>
+              <div>
+                <span id="research-now-kicker" class="eyebrow">Ready</span>
+                <h4 id="research-now-title">Waiting for a starting point</h4>
+                <p id="research-now-detail">Specter will explain each meaningful step as the investigation develops.</p>
+              </div>
+              <div id="research-milestone" class="research-milestone" role="status" aria-live="polite" hidden></div>
+            </section>
+
+            <div id="research-room" class="research-room" data-mode="focus">
+              <section class="research-map" aria-label="Live investigation map">
+                <details class="execution-key">
+                  <summary>Map key</summary>
+                  <div class="execution-legend" aria-label="Execution graph legend">
+                    <span><i class="input-node"></i>Input</span>
+                    <span><i class="running-node"></i>In progress</span>
+                    <span><i class="success-node"></i>Confirmed</span>
+                    <span><i class="uncertain-node"></i>Needs checking</span>
+                    <span><i class="not-found-node"></i>Not found / error</span>
+                    <span><i class="process-shape"></i>Process</span>
+                    <span><i class="artifact-shape"></i>New lead</span>
+                  </div>
+                </details>
+                <div id="live-graph-wrap">
+                  <canvas id="live-graph-canvas" tabindex="0" aria-label="Live investigation execution graph" aria-describedby="live-graph-a11y"></canvas>
+                  <div id="live-graph-empty" class="graph-empty"><strong>No activity yet</strong><span>The map will grow from the starting clue.</span></div>
+                  <div id="live-graph-tooltip" class="graph-tooltip" hidden></div>
+                  <aside id="live-graph-detail" class="graph-detail" aria-live="polite"></aside>
+                </div>
+                <p id="live-graph-a11y" class="sr-only">Use the arrow keys while the graph is focused to inspect each activity node.</p>
+              </section>
+
+              <aside class="discovery-panel" aria-labelledby="discovery-heading">
+                <div class="discovery-heading">
+                  <div><span class="eyebrow">Investigation journal</span><h4 id="discovery-heading">Discoveries</h4></div>
+                  <div class="discovery-totals" aria-label="Discovery totals">
+                    <span><strong id="discovery-confirmed">0</strong> confirmed</span>
+                    <span><strong id="discovery-open">0</strong> to review</span>
+                  </div>
+                </div>
+                <ol id="discovery-feed" class="discovery-feed" aria-live="polite" aria-relevant="additions">
+                  <li id="discovery-feed-empty" class="discovery-empty"><strong>The journal is ready</strong><span>Important leads and decisions will appear here.</span></li>
+                </ol>
+              </aside>
             </div>
-            <div id="live-graph-wrap">
-              <canvas id="live-graph-canvas" tabindex="0" aria-label="Live investigation execution graph" aria-describedby="live-graph-a11y"></canvas>
-              <div id="live-graph-empty" class="graph-empty"><strong>No activity yet</strong><span>Ready for a live investigation.</span></div>
-              <div id="live-graph-tooltip" class="graph-tooltip" hidden></div>
-              <aside id="live-graph-detail" class="graph-detail" aria-live="polite"></aside>
-            </div>
-            <p id="live-graph-a11y" class="sr-only">Use the arrow keys while the graph is focused to inspect each activity node.</p>
           </section>
 
-          <section class="results-workspace" aria-labelledby="results-heading">
+          <section id="scan-stage-evidence" class="results-workspace scan-stage" data-scan-stage="evidence" role="tabpanel" aria-labelledby="scan-view-evidence" hidden>
             <div class="results-toolbar">
               <div>
                 <span class="eyebrow">Current scan</span>
@@ -364,6 +416,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=481c29a55c88"></script>
+  <script src="/static/app.js?v=91b1c2b5f789"></script>
 </body>
 </html>

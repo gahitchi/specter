@@ -13,6 +13,7 @@ from recon import updater
 
 REVISION_A = "a" * 40
 REVISION_B = "b" * 40
+REVISION_C = "c" * 40
 
 
 @pytest.fixture
@@ -159,6 +160,77 @@ def test_check_reuses_downloaded_revision(monkeypatch, update_environment):
     assert "is ready" in result.message
 
 
+def test_manual_build_selection_is_not_replaced_by_automatic_check(
+    monkeypatch, update_environment
+):
+    _cached_project(update_environment, REVISION_B)
+    (update_environment / "pending.json").write_text(
+        json.dumps({"revision": REVISION_B, "title": "Preferred build", "selected": True}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
+    monkeypatch.setattr(updater, "_remote_revision", lambda timeout: REVISION_C)
+    monkeypatch.setattr(
+        updater, "_download_revision", lambda *_args: (_ for _ in ()).throw(AssertionError)
+    )
+
+    result = updater.check_for_update()
+
+    pending = json.loads((update_environment / "pending.json").read_text())
+    assert result.update_available and not result.downloaded
+    assert pending["revision"] == REVISION_B
+    assert pending["selected"] is True
+
+
+def test_list_available_builds_returns_readable_github_history(monkeypatch):
+    payload = [
+        {
+            "sha": REVISION_C,
+            "commit": {
+                "message": "Simplify investigation workspace\n\nDetails",
+                "author": {"name": "Specter Team", "date": "2026-08-21T09:30:00Z"},
+            },
+        },
+        {"sha": "invalid", "commit": {"message": "Ignore me"}},
+    ]
+    response = io.BytesIO(json.dumps(payload).encode())
+    monkeypatch.setattr(updater.urllib.request, "urlopen", lambda *_args, **_kwargs: response)
+
+    builds = updater.list_available_builds(limit=500)
+
+    assert builds == [
+        updater.AvailableBuild(
+            revision=REVISION_C,
+            title="Simplify investigation workspace",
+            authored_at="2026-08-21T09:30:00Z",
+            author="Specter Team",
+        )
+    ]
+
+
+def test_download_build_caches_exact_user_selection(monkeypatch, update_environment):
+    downloaded: list[tuple[str, float]] = []
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
+
+    def download(revision, timeout):
+        downloaded.append((revision, timeout))
+        return _cached_project(update_environment, revision)
+
+    monkeypatch.setattr(updater, "_download_revision", download)
+
+    result = updater.download_build(REVISION_B, title="Known stable build", timeout=9)
+
+    pending = json.loads((update_environment / "pending.json").read_text())
+    assert downloaded == [(REVISION_B, 9)]
+    assert result.downloaded and result.update_available
+    assert pending == {
+        "revision": REVISION_B,
+        "title": "Known stable build",
+        "downloaded_at": pending["downloaded_at"],
+        "selected": True,
+    }
+
+
 def test_current_revision_clears_stale_pending(monkeypatch, update_environment):
     _cached_project(update_environment, REVISION_B)
     monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
@@ -220,7 +292,9 @@ def test_archive_download_rejects_oversized_response(monkeypatch, update_environ
 def test_apply_uses_exact_cached_revision(monkeypatch, update_environment):
     project = _cached_project(update_environment, REVISION_B)
     monkeypatch.setattr(
-        updater, "check_for_update", lambda **_kwargs: updater.UpdateResult(attempted=True)
+        updater,
+        "check_for_update",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("replaced selected build")),
     )
     commands: list[list[str]] = []
     monkeypatch.setattr(
@@ -236,7 +310,7 @@ def test_apply_uses_exact_cached_revision(monkeypatch, update_environment):
     assert result.applied
     assert commands == [[
         "uv", "tool", "install", "--force", "--reinstall-package", "osint-recon",
-        "--quiet", "--no-progress", str(project),
+        "--quiet", "--no-progress", f"{project}[desktop]",
     ]]
     assert not (update_environment / "pending.json").exists()
     assert json.loads((update_environment / "installed.json").read_text())["revision"] == REVISION_B
@@ -278,8 +352,22 @@ def test_apply_can_use_cached_update_while_check_is_offline(monkeypatch, update_
 
 def test_pipx_apply_command_uses_cached_project(tmp_path):
     assert updater._apply_command(("pipx", "pipx"), tmp_path) == [
-        "pipx", "install", "--force", "--quiet", str(tmp_path)
+        "pipx", "install", "--force", "--quiet", f"{tmp_path}[desktop]"
     ]
+
+
+def test_update_status_reports_installed_and_downloaded_revisions(
+    monkeypatch, update_environment
+):
+    _cached_project(update_environment, REVISION_B)
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
+
+    status = updater.get_update_status()
+
+    assert status.supported
+    assert status.installed_label == f"Build {REVISION_A[:12]}"
+    assert status.pending_label == f"Build {REVISION_B[:12]}"
+    assert not status.pending_selected
 
 
 def test_monitor_checks_repeatedly_and_stops(monkeypatch, update_environment):
@@ -334,7 +422,7 @@ def test_launcher_refuses_update_while_specter_is_running(monkeypatch, capsys):
         launch.main(["--update"])
 
     assert raised.value.code == 2
-    assert "stop the running Specter" in capsys.readouterr().out
+    assert "Stop the running Specter application" in capsys.readouterr().out
 
 
 def test_manual_update_applies_and_exits(monkeypatch, capsys):
@@ -370,7 +458,9 @@ def test_launcher_prepares_server_then_workers_and_monitor(monkeypatch):
     monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
     monkeypatch.setattr(launch, "_prepare_database", lambda: events.append("database"))
     monkeypatch.setattr(
-        launch, "_spawn", lambda args: (events.append(f"spawn:{args[0]}") or FinishedProcess())
+        launch,
+        "_spawn",
+        lambda args, **_kwargs: (events.append(f"spawn:{args[0]}") or FinishedProcess()),
     )
     monkeypatch.setattr(launch, "_wait_healthy", lambda url: (events.append("healthy") or True))
     monkeypatch.setattr(
@@ -387,6 +477,111 @@ def test_launcher_prepares_server_then_workers_and_monitor(monkeypatch):
         "database", "spawn:serve", "healthy", "spawn:worker", "spawn:monitor",
         "monitor:start", "monitor:stop",
     ]
+
+
+def test_launcher_owns_desktop_services_until_window_closes(monkeypatch, tmp_path):
+    from recon import launch
+
+    events: list[str] = []
+
+    class RunningProcess:
+        def __init__(self, name):
+            self.name = name
+            self.running = True
+
+        def poll(self):
+            return None if self.running else 0
+
+        def terminate(self):
+            events.append(f"stop:{self.name}")
+            self.running = False
+
+        def wait(self, timeout):
+            return 0
+
+    monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
+    monkeypatch.setattr(launch, "_prepare_database", lambda: events.append("database"))
+    monkeypatch.setattr(launch, "_wait_healthy", lambda url: True)
+    monkeypatch.setattr(launch, "state_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        launch,
+        "_spawn",
+        lambda args, **_kwargs: (
+            events.append(f"start:{args[0]}") or RunningProcess(args[0])
+        ),
+    )
+    monkeypatch.setattr(
+        launch,
+        "_run_desktop",
+        lambda url, **_kwargs: (events.append(f"desktop:{url}") or "quit"),
+    )
+
+    launch.main([])
+
+    assert events == [
+        "database",
+        "start:serve",
+        "start:worker",
+        "start:monitor",
+        "desktop:http://127.0.0.1:8000",
+        "stop:serve",
+        "stop:worker",
+        "stop:monitor",
+    ]
+
+
+def test_desktop_update_request_stops_services_applies_and_restarts(monkeypatch, tmp_path):
+    from recon import launch
+
+    events: list[str] = []
+
+    class RunningProcess:
+        running = True
+
+        def poll(self):
+            return None if self.running else 0
+
+        def terminate(self):
+            self.running = False
+            events.append("stop")
+
+        def wait(self, timeout):
+            return 0
+
+    monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
+    monkeypatch.setattr(launch, "_prepare_database", lambda: None)
+    monkeypatch.setattr(launch, "_wait_healthy", lambda url: True)
+    monkeypatch.setattr(launch, "state_root", lambda: tmp_path)
+    monkeypatch.setattr(launch, "_spawn", lambda args, **_kwargs: RunningProcess())
+    monkeypatch.setattr(launch, "_run_desktop", lambda url, **_kwargs: "apply-update")
+    monkeypatch.setattr(
+        launch,
+        "apply_pending_update",
+        lambda: (events.append("apply") or updater.UpdateResult(applied=True, message="updated")),
+    )
+    monkeypatch.setattr(
+        launch,
+        "_restart_application",
+        lambda **kwargs: events.append(f"restart:{kwargs['notice']}"),
+    )
+
+    launch.main([])
+
+    assert events == ["stop", "stop", "stop", "apply", "restart:updated"]
+
+
+def test_desktop_log_rotates_before_startup(monkeypatch, tmp_path):
+    from recon import launch
+
+    log = tmp_path / "logs" / "specter.log"
+    log.parent.mkdir(parents=True)
+    with log.open("wb") as stream:
+        stream.truncate(5 * 1024 * 1024)
+    monkeypatch.setattr(launch, "state_root", lambda: tmp_path)
+
+    assert launch._desktop_log_path() == log
+    assert not log.exists()
+    assert log.with_suffix(".log.1").stat().st_size == 5 * 1024 * 1024
 
 
 def test_launcher_does_not_spawn_when_database_preparation_fails(monkeypatch, capsys):
@@ -408,4 +603,4 @@ def test_launcher_does_not_spawn_when_database_preparation_fails(monkeypatch, ca
         launch.main(["--no-browser"])
 
     assert raised.value.code == 1
-    assert "database startup failed: migration unavailable" in capsys.readouterr().err
+    assert "could not prepare its local database: migration unavailable" in capsys.readouterr().err

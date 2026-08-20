@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$PackageSpec = "osint-recon @ git+https://github.com/gahitchi/osint-recon.git@gpt-branch"
+$PackageSpec = "osint-recon[desktop] @ git+https://github.com/gahitchi/osint-recon.git@gpt-branch"
 
 function Find-Uv {
     $Command = Get-Command uv -ErrorAction SilentlyContinue
@@ -39,11 +39,22 @@ if ($LASTEXITCODE -ne 0) {
 
 $BinDirectory = (& $Uv tool dir --bin).Trim()
 $Specter = Join-Path $BinDirectory "specter.exe"
+$SpecterApp = Join-Path $BinDirectory "specter-app.exe"
+$Programs = [Environment]::GetFolderPath("Programs")
+$ShortcutPath = Join-Path $Programs "Specter.lnk"
+$Shell = New-Object -ComObject WScript.Shell
+$Shortcut = $Shell.CreateShortcut($ShortcutPath)
+$Shortcut.TargetPath = $SpecterApp
+$Shortcut.WorkingDirectory = $HOME
+$Shortcut.Description = "Specter research and evidence workspace"
+$Shortcut.IconLocation = "$SpecterApp,0"
+$Shortcut.Save()
+
 Write-Host "Specter installed successfully. While running, it checks for updates every 5 minutes."
-Write-Host "Launch at any time with: specter"
+Write-Host "Open Specter from the Start menu, or launch it with: specter"
 Write-Host "Apply a downloaded update with: specter --update"
-Write-Host "Uninstall with: uv tool uninstall osint-recon"
+Write-Host "Uninstall with: irm https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/uninstall.ps1 | iex"
 
 if (-not $NoLaunch) {
-    & $Specter --no-update
+    Start-Process -FilePath $SpecterApp -ArgumentList "--no-update"
 }

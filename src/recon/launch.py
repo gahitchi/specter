@@ -1,25 +1,20 @@
-"""Specter launcher: wake the whole stack and open the dashboard in Firefox.
-
-Boots the API/dashboard server plus a background worker and the monitoring
-scheduler, waits until the server is healthy, then opens a Firefox tab pointed at
-the local dashboard. Stays in the foreground supervising the children; Ctrl-C
-shuts everything down cleanly. If the server is already running it just opens the
-tab and exits (the software is already awake).
-"""
+"""Specter application launcher and local service supervisor."""
 
 from __future__ import annotations
 
 import argparse
-import shutil
+import json
+import os
+from pathlib import Path
 import signal
 import socket
 import subprocess
 import sys
 import time
 import urllib.request
-import webbrowser
 
 from .config import SETTINGS
+from .desktop_settings import load_desktop_settings, state_root
 from .updater import apply_pending_update, start_update_monitor
 
 BANNER = r"""
@@ -28,7 +23,7 @@ BANNER = r"""
   \___ \| '_ \/ _ \/ __| __/ _ \ '__|
    ___) | |_) |  __/ (__| ||  __/ |
   |____/| .__/ \___|\___|\__\___|_|
-        |_|   Specter - waking up...
+        |_|   Specter
 """
 
 CLI_COMMANDS = frozenset({
@@ -41,43 +36,57 @@ CLI_COMMANDS = frozenset({
 })
 
 
+def _output(message: str, *, error: bool = False) -> None:
+    stream = sys.stderr if error else sys.stdout
+    if stream is not None:
+        print(message, file=stream)
+
+
 def _port_open(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        return s.connect_ex((host, port)) == 0
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+        connection.settimeout(0.5)
+        return connection.connect_ex((host, port)) == 0
 
 
 def _wait_healthy(url: str, timeout: float = 25.0) -> bool:
     deadline = time.time() + timeout
+    health_url = f"{url.rstrip('/')}/health/live"
     while time.time() < deadline:
         try:
             # The caller constructs this URL from the fixed loopback host.
-            with urllib.request.urlopen(url, timeout=2) as r:  # nosec B310
-                if r.status == 200:
+            with urllib.request.urlopen(health_url, timeout=2) as response:  # nosec B310
+                payload = json.loads(response.read(16 * 1024))
+                if response.status == 200 and payload.get("status") == "alive":
                     return True
-        except Exception:
+        except (OSError, ValueError, json.JSONDecodeError):
             time.sleep(0.4)
     return False
 
 
-def open_firefox(url: str) -> None:
-    """Open `url` in a new Firefox tab; fall back to the default browser."""
-    firefox = shutil.which("firefox") or shutil.which("firefox-esr")
-    if firefox:
-        try:
-            subprocess.Popen([firefox, "--new-tab", url],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # nosec B603
-            return
-        except OSError:
-            pass
+def _spawn(args: list[str], *, log_path: Path | None = None) -> subprocess.Popen:
+    command = [sys.executable, "-m", "recon.cli", *args]
+    if log_path is None:
+        return subprocess.Popen(command)  # nosec B603
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as log:
+        return subprocess.Popen(  # nosec B603
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+
+
+def _desktop_log_path() -> Path:
+    log_path = state_root() / "logs" / "specter.log"
     try:
-        webbrowser.get("firefox").open_new_tab(url)
-    except webbrowser.Error:
-        webbrowser.open_new_tab(url)
-
-
-def _spawn(args: list[str]) -> subprocess.Popen:
-    return subprocess.Popen([sys.executable, "-m", "recon.cli", *args])  # nosec B603
+        if log_path.stat().st_size >= 5 * 1024 * 1024:
+            backup = log_path.with_suffix(".log.1")
+            backup.unlink(missing_ok=True)
+            log_path.replace(backup)
+    except OSError:
+        pass
+    return log_path
 
 
 def _prepare_database() -> None:
@@ -88,6 +97,78 @@ def _prepare_database() -> None:
         database.ping()
 
 
+def _run_desktop(url: str, *, updates: bool, instance_key: str) -> str:
+    try:
+        from .desktop import run_desktop
+    except ImportError as exc:
+        if exc.name and exc.name.startswith("PySide6"):
+            _output(
+                "Specter's desktop components are missing. Re-run the one-command installer.",
+                error=True,
+            )
+            raise SystemExit(1) from None
+        raise
+    return run_desktop(url, update_checks_allowed=updates, instance_key=instance_key)
+
+
+def _shutdown_processes(processes: list[subprocess.Popen]) -> None:
+    running = [process for process in processes if process.poll() is None]
+    for process in running:
+        process.terminate()
+    for process in running:
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+
+
+def _restart_application(*, notice: str = "") -> None:
+    environment = os.environ.copy()
+    if notice:
+        environment["SPECTER_STARTUP_NOTICE"] = notice
+    options: dict = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "env": environment,
+    }
+    if os.name == "nt":
+        options["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        )
+    else:
+        options["start_new_session"] = True
+    subprocess.Popen([sys.executable, "-m", "recon.launch"], **options)  # nosec B603
+
+
+def _run_headless(processes: list[subprocess.Popen], *, updates: bool) -> None:
+    monitor = start_update_monitor(
+        enabled=updates,
+        notify=lambda message: _output(f"\n  {message}"),
+    )
+    if not updates:
+        _output("  update checks disabled")
+    elif monitor is not None:
+        _output("  checking GitHub for updates every 5 minutes")
+    _output("  services running - press Ctrl-C to shut down")
+
+    stopping = False
+
+    def request_shutdown(*_args) -> None:
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGINT, request_shutdown)
+    signal.signal(signal.SIGTERM, request_shutdown)
+    try:
+        while not stopping and not all(process.poll() is not None for process in processes):
+            time.sleep(1)
+    finally:
+        if monitor is not None:
+            monitor.stop()
+
+
 def main(argv: list[str] | None = None) -> None:
     launch_args = list(sys.argv[1:] if argv is None else argv)
     if launch_args and launch_args[0] in CLI_COMMANDS:
@@ -96,91 +177,87 @@ def main(argv: list[str] | None = None) -> None:
         cli_main(launch_args)
         return
 
-    p = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="specter",
-        description="Start Specter and open its dashboard.",
-        epilog="Research commands are also available, for example: specter scan <value>",
+        description="Start the Specter desktop application.",
+        epilog="Research commands remain available, for example: specter scan <value>",
     )
-    p.add_argument("--no-browser", action="store_true", help="don't open Firefox")
-    p.add_argument("--no-workers", action="store_true", help="server only (no worker/scheduler)")
-    update_mode = p.add_mutually_exclusive_group()
+    parser.add_argument(
+        "--headless", action="store_true", help="run local services without the desktop window"
+    )
+    parser.add_argument("--no-browser", dest="headless", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--no-workers", action="store_true", help="don't start background services")
+    update_mode = parser.add_mutually_exclusive_group()
     update_mode.add_argument("--no-update", action="store_true", help="disable update checks")
     update_mode.add_argument(
         "--update", action="store_true", help="apply the downloaded update and exit"
     )
-    p.add_argument("--port", type=int, default=SETTINGS.port)
-    args = p.parse_args(launch_args)
+    parser.add_argument("--port", type=int, default=SETTINGS.port)
+    args = parser.parse_args(launch_args)
 
     host, port = SETTINGS.host, args.port
     url = f"http://{host}:{port}"
+    updates_enabled = not args.no_update
 
-    print(BANNER)
+    if args.headless:
+        _output(BANNER)
 
     if args.update:
         if _port_open(host, port):
-            print("  stop the running Specter instance before applying its update")
+            _output("Stop the running Specter application before applying its update.")
             raise SystemExit(2)
         update = apply_pending_update()
-        print(f"  {update.message or 'no update is available'}")
+        _output(update.message or "No update is available.")
         raise SystemExit(0 if update.applied or not update.update_available else 1)
 
-    # Already awake? Just open the tab.
     if _port_open(host, port):
-        print(f"  already running at {url}")
-        if not args.no_browser:
-            open_firefox(url)
+        if not _wait_healthy(url, timeout=2):
+            _output(f"Port {port} is already used by another application.", error=True)
+            raise SystemExit(1)
+        if args.headless:
+            _output(f"  Specter is already running at {url}")
+            return
+        _run_desktop(url, updates=updates_enabled, instance_key=f"{host}:{port}")
         return
 
     try:
         _prepare_database()
     except Exception as exc:
-        print(f"  database startup failed: {exc}", file=sys.stderr)
+        _output(f"Specter could not prepare its local database: {exc}", error=True)
         raise SystemExit(1) from None
 
-    procs: list[subprocess.Popen] = [_spawn(["serve"])]
-
-    if _wait_healthy(url):
-        print(f"  dashboard ready at {url}")
-        if not args.no_workers:
-            procs.append(_spawn(["worker"]))
-            procs.append(_spawn(["monitor"]))
-        if not args.no_browser:
-            open_firefox(url)
-            print("  opened Firefox tab")
-    else:
-        print("  server did not become healthy in time; check logs", file=sys.stderr)
-
-    update_monitor = start_update_monitor(
-        enabled=not args.no_update,
-        notify=lambda message: print(f"\n  {message}"),
+    desktop_settings = load_desktop_settings()
+    start_workers = not args.no_workers and (
+        args.headless or desktop_settings.background_services
     )
-    if args.no_update:
-        print("  update checks disabled")
-    elif update_monitor is not None:
-        print("  checking GitHub for updates every 5 minutes")
+    log_path = None if args.headless else _desktop_log_path()
+    processes: list[subprocess.Popen] = [_spawn(["serve"], log_path=log_path)]
 
-    print("  stack running - press Ctrl-C to shut down")
+    if not _wait_healthy(url):
+        _output("Specter's local service did not become ready. Check the application log.", error=True)
+        _shutdown_processes(processes)
+        raise SystemExit(1)
 
-    def _shutdown(*_):
-        if update_monitor is not None:
-            update_monitor.stop()
-        for proc in procs:
-            proc.terminate()
-        for proc in procs:
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-        sys.exit(0)
+    if start_workers:
+        processes.append(_spawn(["worker"], log_path=log_path))
+        processes.append(_spawn(["monitor"], log_path=log_path))
 
-    signal.signal(signal.SIGINT, _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
-    while True:
-        time.sleep(1)
-        if all(proc.poll() is not None for proc in procs):
-            break
-    if update_monitor is not None:
-        update_monitor.stop()
+    action = "quit"
+    try:
+        if args.headless:
+            _run_headless(processes, updates=updates_enabled)
+        else:
+            action = _run_desktop(
+                url,
+                updates=updates_enabled,
+                instance_key=f"{host}:{port}",
+            )
+    finally:
+        _shutdown_processes(processes)
+
+    if action == "apply-update":
+        result = apply_pending_update()
+        _restart_application(notice=result.message)
 
 
 if __name__ == "__main__":

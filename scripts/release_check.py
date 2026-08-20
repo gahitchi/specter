@@ -19,8 +19,11 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 only
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_WHEEL_FILES = {
+    "recon/assets/specter.svg",
     "recon/data/calibration_labels.json",
     "recon/data/sites.json",
+    "recon/desktop.py",
+    "recon/desktop_settings.py",
     "recon/migrations/versions/20260814_0004_job_activity.py",
     "recon/updater.py",
     "recon/web/app.js",
@@ -36,6 +39,8 @@ REQUIRED_SDIST_FILES = {
     "install.ps1",
     "install.sh",
     "pyproject.toml",
+    "uninstall.ps1",
+    "uninstall.sh",
 }
 PROJECT_URLS = {"Homepage", "Documentation", "Repository", "Issues", "Changelog"}
 SENSITIVE_DIRS = {"backups", "reports"}
@@ -151,6 +156,11 @@ def _check_wheel(wheel: Path, version: str, errors: list[str]) -> None:
             errors.append("wheel metadata has an unexpected Requires-Python value")
         if metadata.get("License-Expression") != "MIT":
             errors.append("wheel metadata must contain License-Expression: MIT")
+        if "desktop" not in metadata.get_all("Provides-Extra", failobj=[]):
+            errors.append("wheel metadata is missing the desktop extra")
+        requirements = metadata.get_all("Requires-Dist", failobj=[])
+        if not any(requirement.startswith("PySide6") for requirement in requirements):
+            errors.append("wheel metadata is missing the PySide6 desktop dependency")
         urls = {
             value.split(",", 1)[0].strip()
             for value in metadata.get_all("Project-URL", failobj=[])
@@ -161,7 +171,11 @@ def _check_wheel(wheel: Path, version: str, errors: list[str]) -> None:
             errors.append("wheel must contain console entry points")
         else:
             entries = archive.read(entry_paths[0]).decode("utf-8")
-            for command in ("recon = recon.cli:main", "specter = recon.launch:main"):
+            for command in (
+                "recon = recon.cli:main",
+                "specter = recon.launch:main",
+                "specter-app = recon.launch:main",
+            ):
                 if command not in entries:
                     errors.append(f"wheel is missing entry point: {command}")
 

@@ -1,12 +1,14 @@
 """Alembic adopts a pre-migration SQLite database without losing its rows."""
 
 from concurrent.futures import ThreadPoolExecutor
+import dataclasses
 import threading
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 from recon.store.db import Database
+from recon.store import db as db_module
 from recon.store import models_db
 from recon.store.repo import _target_query_predicate
 
@@ -28,6 +30,34 @@ def test_postgres_target_query_comparison_casts_json_to_jsonb():
     assert "CAST(targets.query AS JSONB)" in compiled
 
 
+def test_default_database_copies_legacy_working_directory_data(monkeypatch, tmp_path):
+    legacy = tmp_path / "data" / "recon.db"
+    legacy.parent.mkdir()
+    engine = sa.create_engine(f"sqlite:///{legacy}")
+    with engine.begin() as connection:
+        connection.execute(sa.text("CREATE TABLE legacy_marker (value TEXT)"))
+        connection.execute(sa.text("INSERT INTO legacy_marker VALUES ('preserved')"))
+    engine.dispose()
+
+    target = tmp_path / "application-data" / "specter.db"
+    target_dsn = f"sqlite:///{target.as_posix()}"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("RECON_DB_DSN", raising=False)
+    monkeypatch.delenv("RECON_DB_DSN_FILE", raising=False)
+    monkeypatch.setattr(
+        db_module,
+        "SETTINGS",
+        dataclasses.replace(db_module.SETTINGS, storage_dsn=target_dsn),
+    )
+
+    assert db_module._default_dsn() == target_dsn
+    copied = sa.create_engine(target_dsn)
+    with copied.connect() as connection:
+        assert connection.execute(sa.text("SELECT value FROM legacy_marker")).scalar_one() == "preserved"
+    copied.dispose()
+    assert legacy.is_file()
+
+
 def test_backfill_adds_missing_column_preserving_rows(tmp_path):
     dsn = f"sqlite:///{tmp_path / 'old.db'}"
     eng = sa.create_engine(dsn)
@@ -45,9 +75,11 @@ def test_backfill_adds_missing_column_preserving_rows(tmp_path):
         assert "breakdown" in cols
         # Existing row survives the migration.
         with db.session() as s:
-            row = s.execute(
+            result = s.execute(
                 sa.text("SELECT source, breakdown FROM observations WHERE id=1")
-            ).one()
+            )
+            row = result.one()
+            result.close()
             assert row[0] == "username:GitHub"
             assert row[1] is None
 

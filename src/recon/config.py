@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import __version__
+from .desktop_settings import data_root
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
@@ -140,7 +141,9 @@ class Settings:
     reports_dir: str = "reports"
 
     # --- Storage / scale (pluggable; local-first defaults) ---
-    storage_dsn: str = "sqlite:///data/recon.db"  # set RECON_DB_DSN to a Postgres URL
+    storage_dsn: str = field(
+        default_factory=lambda: f"sqlite:///{(data_root() / 'data' / 'specter.db').as_posix()}"
+    )  # set RECON_DB_DSN to a Postgres URL
     queue_backend: str = field(
         default_factory=lambda: os.environ.get("RECON_QUEUE_BACKEND", "local").lower()
     )  # local | arq

@@ -42,14 +42,34 @@ They were not published releases; their changes are included in 0.11.0.
 - A non-disruptive update monitor for isolated `uv` and `pipx` installs. It
   checks GitHub every five minutes, downloads immutable revisions to a local
   cache, and applies them only after an explicit `specter --update` command.
+- A cross-platform Qt desktop application with a native window, menu system,
+  single-instance activation, persisted settings, system tray notifications,
+  investigation-completion alerts, and a human-readable update manager.
+- A version-history manager for recent immutable GitHub builds, with readable
+  commit titles and dates, exact-build downloads, deliberate older-build
+  installation, compatibility warnings, and protection from background
+  replacement of a manual selection.
+- Start menu and Linux application-menu integration, application artwork, and
+  one-command uninstallers that preserve local investigations and settings.
 
 ### Changed
 
 - Specter is now the product name and primary command. Legacy package, command,
   import, configuration, and infrastructure identifiers remain compatible.
 - The dashboard now uses a responsive operations workspace with grouped
-  navigation, clearer scan states, accessible page context, verdict filtering,
-  denser evidence views, a responsive live graph, and content-revisioned assets.
+  accordion navigation, a focused Start/Activity/Evidence investigation flow,
+  clearer scan states, accessible page context, verdict filtering, denser
+  evidence views, a responsive live graph, and content-revisioned assets.
+- Live research now unfolds in a Focus/Explore Research Room with truthful
+  phase progression, plain-language activity explanations, an interactive
+  discovery journal, milestones, branch following, connection explanations,
+  smoothly animated graph changes, and reduced-motion support.
+- The one-command installers now open the native Specter application instead of
+  a browser tab. Headless services and research commands remain available from
+  the terminal.
+- Local databases, settings, and bounded logs now use stable platform data
+  directories. Existing working-directory databases are copied forward on first
+  launch without deleting the original file.
 - Production scans are always dispatched to workers; web requests no longer
   execute collection work in-process.
 - Production schema upgrades are one-shot deployment steps and never happen in

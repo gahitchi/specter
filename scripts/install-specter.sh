@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Install the `specter` terminal command: wakes the whole Specter stack
-# (server + worker + scheduler) and opens the dashboard in a Firefox tab.
+# Development helper for exposing Specter commands from this checkout.
 #
 # Usage:  ./scripts/install-specter.sh
 set -euo pipefail
@@ -12,16 +11,12 @@ BIN="${XDG_BIN_HOME:-$HOME/.local/bin}"
 if [ ! -x "$VENV/bin/specter" ]; then
   echo "Setting up virtualenv at $VENV ..."
   python -m venv "$VENV"
-  "$VENV/bin/pip" install -q -e "$REPO"
+  "$VENV/bin/pip" install -q -e "$REPO[desktop]"
 fi
 
 mkdir -p "$BIN"
-cat > "$BIN/specter" <<EOF
-#!/usr/bin/env bash
-# Specter launcher - wakes the stack and opens the dashboard in Firefox.
-exec "$VENV/bin/specter" "\$@"
-EOF
-chmod +x "$BIN/specter"
+ln -sf "$VENV/bin/specter" "$BIN/specter"
+ln -sf "$VENV/bin/specter-app" "$BIN/specter-app"
 
 echo "Installed: $BIN/specter"
 case ":$PATH:" in

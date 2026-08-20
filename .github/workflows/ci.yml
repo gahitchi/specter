@@ -20,16 +20,22 @@ jobs:
         include:
           - os: ubuntu-latest
             python-version: "3.10"
+            desktop_extra: ""
           - os: ubuntu-latest
             python-version: "3.11"
+            desktop_extra: ""
           - os: ubuntu-latest
             python-version: "3.12"
+            desktop_extra: "--extra desktop"
           - os: ubuntu-latest
             python-version: "3.13"
+            desktop_extra: ""
           - os: ubuntu-latest
             python-version: "3.14"
+            desktop_extra: ""
           - os: windows-latest
             python-version: "3.12"
+            desktop_extra: "--extra desktop"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -38,18 +44,26 @@ jobs:
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
-      - run: uv sync --locked --extra dev --extra ml
+      - run: uv sync --locked --extra dev --extra ml ${{ matrix.desktop_extra }}
       - run: uv run ruff check .
       - run: uv run pytest -q
       - run: uv run python -m recon.cli --help
       - run: uv run python -c "from recon.sources import validate_contracts; assert not validate_contracts()"
+      - name: Smoke-test native desktop
+        if: matrix.desktop_extra != ''
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+        run: uv run python scripts/desktop_smoke.py
       - name: Validate Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
-        run: '[scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null'
+        run: |
+          [scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw uninstall.ps1)) | Out-Null
       - name: Validate Arch Linux installer
         if: runner.os == 'Linux' && matrix.python-version == '3.12'
-        run: bash -n install.sh
+        run: bash -n install.sh uninstall.sh
 
   package-and-audit:
     runs-on: ubuntu-latest
@@ -70,15 +84,19 @@ jobs:
         run: >-
           uv run python -c "import glob, zipfile;
           wheel=glob.glob('dist/*.whl')[-1];
-          names=set(zipfile.ZipFile(wheel).namelist());
-          required={'recon/updater.py','recon/web/index.html','recon/web/app.js','recon/web/style.css','recon/data/sites.json','recon/data/calibration_labels.json','recon/migrations/versions/20260813_0001_maturity_schema.py','recon/migrations/versions/20260814_0004_job_activity.py'};
-          assert required <= names, required-names"
+          archive=zipfile.ZipFile(wheel);
+          names=set(archive.namelist());
+          entry_name=next(name for name in names if name.endswith('.dist-info/entry_points.txt'));
+          entry_points=archive.read(entry_name).decode();
+          required={'recon/desktop.py','recon/desktop_settings.py','recon/assets/specter.svg','recon/updater.py','recon/web/index.html','recon/web/app.js','recon/web/style.css','recon/data/sites.json','recon/data/calibration_labels.json','recon/migrations/versions/20260813_0001_maturity_schema.py','recon/migrations/versions/20260814_0004_job_activity.py'};
+          assert required <= names, required-names;
+          assert 'specter-app = recon.launch:main' in entry_points"
       - name: Validate operator scripts
-        run: sh -n install.sh scripts/backup-postgres.sh scripts/restore-postgres.sh
+        run: sh -n install.sh uninstall.sh scripts/backup-postgres.sh scripts/restore-postgres.sh
       - run: uv run bandit -q -c pyproject.toml -r src scripts
       - name: Audit locked runtime dependencies
         run: |
-          uv export --locked --extra pdf --extra postgres --extra distributed --extra secure --extra ml --no-dev --no-emit-project --format requirements-txt --output-file audit-requirements.txt
+          uv export --locked --extra desktop --extra pdf --extra postgres --extra distributed --extra secure --extra ml --no-dev --no-emit-project --format requirements-txt --output-file audit-requirements.txt
           uv run pip-audit --cache-dir .cache/pip-audit --no-deps --disable-pip -r audit-requirements.txt
 
   postgres:

@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 import urllib.request
 
@@ -21,9 +22,13 @@ PACKAGE_NAME = "osint-recon"  # Compatibility identifier used by existing instal
 PRODUCT_NAME = "Specter"
 UPDATE_INTERVAL_SECONDS = 300.0
 GITHUB_API_URL = "https://api.github.com/repos/gahitchi/osint-recon/commits/gpt-branch"
+GITHUB_COMMITS_URL = (
+    "https://api.github.com/repos/gahitchi/osint-recon/commits?sha=gpt-branch&per_page={limit}"
+)
 GITHUB_ARCHIVE_URL = "https://github.com/gahitchi/osint-recon/archive/{revision}.tar.gz"
 _MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 _MAX_EXTRACTED_BYTES = 250 * 1024 * 1024
+_UPDATE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,41 @@ class UpdateResult:
     downloaded: bool = False
     applied: bool = False
     message: str = ""
+
+
+@dataclass(frozen=True)
+class AvailableBuild:
+    revision: str
+    title: str
+    authored_at: str
+    author: str = ""
+
+    @property
+    def date_label(self) -> str:
+        try:
+            date = datetime.fromisoformat(self.authored_at.replace("Z", "+00:00"))
+        except ValueError:
+            return "Date unavailable"
+        return date.astimezone().strftime("%d %b %Y, %H:%M")
+
+
+@dataclass(frozen=True)
+class UpdateStatus:
+    supported: bool
+    installed_revision: str | None
+    pending_revision: str | None
+    pending_title: str | None = None
+    pending_selected: bool = False
+
+    @property
+    def installed_label(self) -> str:
+        return f"Build {self.installed_revision[:12]}" if self.installed_revision else "Unknown"
+
+    @property
+    def pending_label(self) -> str:
+        if self.pending_title:
+            return f"{self.pending_title} (Build {self.pending_revision[:12]})"
+        return f"Build {self.pending_revision[:12]}" if self.pending_revision else "None"
 
 
 @dataclass
@@ -133,7 +173,12 @@ def _installed_revision() -> str | None:
             revision = _valid_revision((payload.get("vcs_info") or {}).get("commit_id"))
             if revision:
                 return revision
-    except (AttributeError, importlib.metadata.PackageNotFoundError, json.JSONDecodeError, TypeError):
+    except (
+        AttributeError,
+        importlib.metadata.PackageNotFoundError,
+        json.JSONDecodeError,
+        TypeError,
+    ):
         pass
     return _valid_revision(_read_json(_cache_root() / "installed.json").get("revision"))
 
@@ -153,6 +198,47 @@ def _remote_revision(timeout: float) -> str:
     if revision is None:
         raise ValueError("GitHub returned an invalid revision")
     return revision
+
+
+def list_available_builds(*, timeout: float = 20.0, limit: int = 20) -> list[AvailableBuild]:
+    """Return recent immutable builds from the configured GitHub branch."""
+    bounded_limit = max(1, min(limit, 50))
+    request = urllib.request.Request(
+        GITHUB_COMMITS_URL.format(limit=bounded_limit),
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Specter version history",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
+        payload = json.loads(response.read(4 * 1024 * 1024))
+    if not isinstance(payload, list):
+        raise ValueError("GitHub returned an invalid build history")
+
+    builds: list[AvailableBuild] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        revision = _valid_revision(item.get("sha"))
+        commit = item.get("commit")
+        if revision is None or not isinstance(commit, dict):
+            continue
+        author = commit.get("author")
+        author = author if isinstance(author, dict) else {}
+        message = commit.get("message")
+        title = str(message).splitlines()[0].strip() if isinstance(message, str) else ""
+        builds.append(
+            AvailableBuild(
+                revision=revision,
+                title=title or "Untitled build",
+                authored_at=str(author.get("date") or ""),
+                author=str(author.get("name") or ""),
+            )
+        )
+    if not builds:
+        raise ValueError("GitHub returned no usable builds")
+    return builds
 
 
 def _safe_member_path(member_name: str) -> tuple[str, ...] | None:
@@ -221,12 +307,39 @@ def _download_revision(revision: str, timeout: float) -> Path:
         raise
 
 
-def _pending_revision() -> tuple[str, Path] | None:
-    revision = _valid_revision(_read_json(_cache_root() / "pending.json").get("revision"))
+def _pending_metadata() -> dict:
+    payload = _read_json(_cache_root() / "pending.json")
+    revision = _valid_revision(payload.get("revision"))
     if revision is None:
-        return None
+        return {}
     project = _cache_root() / revision
-    return (revision, project) if (project / "pyproject.toml").is_file() else None
+    if not (project / "pyproject.toml").is_file():
+        return {}
+    return {
+        "revision": revision,
+        "project": project,
+        "title": str(payload.get("title") or "").strip() or None,
+        "selected": payload.get("selected") is True,
+    }
+
+
+def _pending_revision() -> tuple[str, Path] | None:
+    pending = _pending_metadata()
+    if not pending:
+        return None
+    return pending["revision"], pending["project"]
+
+
+def get_update_status() -> UpdateStatus:
+    """Return local update state without making a network request."""
+    pending = _pending_metadata()
+    return UpdateStatus(
+        supported=_installation_manager() is not None,
+        installed_revision=_installed_revision(),
+        pending_revision=pending.get("revision"),
+        pending_title=pending.get("title"),
+        pending_selected=bool(pending.get("selected")),
+    )
 
 
 def _prune_cached_revisions(*, keep: set[str] | None = None) -> None:
@@ -252,40 +365,92 @@ def check_for_update(
     if _installation_manager() is None:
         return UpdateResult()
 
-    try:
-        installed = _installed_revision()
-        remote = _remote_revision(timeout)
-        if installed == remote:
-            (_cache_root() / "pending.json").unlink(missing_ok=True)
-            return UpdateResult(attempted=True, message=f"{PRODUCT_NAME} is up to date")
-        pending = _pending_revision()
-        if pending and pending[0] == remote:
+    with _UPDATE_LOCK:
+        try:
+            installed = _installed_revision()
+            remote = _remote_revision(timeout)
+            pending_metadata = _pending_metadata()
+            if pending_metadata.get("selected"):
+                return UpdateResult(
+                    attempted=True,
+                    update_available=pending_metadata["revision"] != installed,
+                    message="Your selected build is downloaded and ready to install",
+                )
+            if installed == remote:
+                (_cache_root() / "pending.json").unlink(missing_ok=True)
+                _prune_cached_revisions()
+                return UpdateResult(attempted=True, message=f"{PRODUCT_NAME} is up to date")
+            pending = _pending_revision()
+            if pending and pending[0] == remote:
+                return UpdateResult(
+                    attempted=True,
+                    update_available=True,
+                    message=f"A {PRODUCT_NAME} update is ready to install",
+                )
+            _download_revision(remote, timeout)
+            _write_json(
+                _cache_root() / "pending.json",
+                {
+                    "revision": remote,
+                    "downloaded_at": int(time.time()),
+                    "selected": False,
+                },
+            )
+            _prune_cached_revisions(keep={remote})
             return UpdateResult(
                 attempted=True,
                 update_available=True,
-                message=f"{PRODUCT_NAME} update {remote[:8]} is ready; run specter --update",
+                downloaded=True,
+                message=f"A {PRODUCT_NAME} update was downloaded and is ready to install",
             )
-        _download_revision(remote, timeout)
-        _write_json(
-            _cache_root() / "pending.json",
-            {"revision": remote, "downloaded_at": int(time.time())},
-        )
-        _prune_cached_revisions(keep={remote})
-        return UpdateResult(
-            attempted=True,
-            update_available=True,
-            downloaded=True,
-            message=f"{PRODUCT_NAME} update {remote[:8]} downloaded; run specter --update",
-        )
-    except (OSError, ValueError, json.JSONDecodeError, tarfile.TarError):
-        return UpdateResult(
-            attempted=True,
-            message="update check unavailable; Specter will keep running",
-        )
+        except (OSError, ValueError, json.JSONDecodeError, tarfile.TarError):
+            return UpdateResult(
+                attempted=True,
+                message="update check unavailable; Specter will keep running",
+            )
+
+
+def download_build(
+    revision: str, *, title: str | None = None, timeout: float = 60.0
+) -> UpdateResult:
+    """Cache an exact user-selected build without applying it."""
+    validated = _valid_revision(revision)
+    if validated is None:
+        return UpdateResult(attempted=True, message="The selected build is invalid")
+    if _installation_manager() is None:
+        return UpdateResult(message="updates are unavailable for this installation")
+
+    with _UPDATE_LOCK:
+        if _installed_revision() == validated:
+            return UpdateResult(attempted=True, message="That build is already installed")
+        try:
+            _download_revision(validated, timeout)
+            _write_json(
+                _cache_root() / "pending.json",
+                {
+                    "revision": validated,
+                    "title": (title or "").strip() or None,
+                    "downloaded_at": int(time.time()),
+                    "selected": True,
+                },
+            )
+            _prune_cached_revisions(keep={validated})
+        except (OSError, ValueError, json.JSONDecodeError, tarfile.TarError):
+            return UpdateResult(
+                attempted=True,
+                message="The selected build could not be downloaded; the current version is unchanged",
+            )
+    return UpdateResult(
+        attempted=True,
+        update_available=True,
+        downloaded=True,
+        message=f"Build {validated[:12]} is downloaded and ready to install",
+    )
 
 
 def _apply_command(manager: tuple[str, str], project: Path) -> list[str]:
     manager_name, executable = manager
+    desktop_project = f"{project}[desktop]"
     if manager_name == "uv":
         return [
             executable,
@@ -296,21 +461,23 @@ def _apply_command(manager: tuple[str, str], project: Path) -> list[str]:
             PACKAGE_NAME,
             "--quiet",
             "--no-progress",
-            str(project),
+            desktop_project,
         ]
-    return [executable, "install", "--force", "--quiet", str(project)]
+    return [executable, "install", "--force", "--quiet", desktop_project]
 
 
 def apply_pending_update(*, timeout: float = 180.0) -> UpdateResult:
-    """Apply the newest cached revision after an explicit user request."""
+    """Apply the exact cached revision after an explicit user request."""
     manager = _installation_manager()
     if manager is None:
         return UpdateResult(message="updates are unavailable for this installation")
 
-    check = check_for_update(force=True, timeout=min(timeout, 20.0))
     pending = _pending_revision()
     if pending is None:
-        return check
+        check = check_for_update(force=True, timeout=min(timeout, 20.0))
+        pending = _pending_revision()
+        if pending is None:
+            return check
     revision, project = pending
     try:
         completed = subprocess.run(  # nosec B603
@@ -341,7 +508,7 @@ def apply_pending_update(*, timeout: float = 180.0) -> UpdateResult:
     return UpdateResult(
         attempted=True,
         applied=True,
-        message=f"Specter update {revision[:8]} applied; start Specter normally",
+        message="Specter was updated successfully",
     )
 
 
