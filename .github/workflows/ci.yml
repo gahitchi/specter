@@ -54,6 +54,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
+          QT_QUICK_BACKEND: software
         run: uv run python scripts/desktop_smoke.py
       - name: Validate Windows installer
         if: runner.os == 'Windows'

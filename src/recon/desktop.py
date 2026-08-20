@@ -77,7 +77,12 @@ _BRIDGE_SCRIPT = r"""
           String(detail.level || "info")
         );
       });
+      window.__specterDesktopBridgeReady = true;
+      window.dispatchEvent(new CustomEvent("specter:bridge-ready"));
     });
+  };
+  script.onerror = () => {
+    window.__specterDesktopBridgeInstalled = false;
   };
   document.head.appendChild(script);
 })();

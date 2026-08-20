@@ -18,7 +18,7 @@ def main() -> None:
         close_to_tray=False,
     )
     window = SpecterWindow(
-        "http://127.0.0.1:1",
+        "about:blank",
         settings,
         update_checks_allowed=False,
         instance_name="specter-ci-desktop-smoke",
@@ -36,9 +36,12 @@ def main() -> None:
         [AvailableBuild("a" * 40, "Desktop smoke build", "2026-08-21T09:30:00Z")]
     )
     notifications: list[tuple[str, str, str]] = []
-    window.bridge.notification.connect(
-        lambda title, message, level: notifications.append((title, message, level))
-    )
+
+    def record_notification(title: str, message: str, level: str) -> None:
+        notifications.append((title, message, level))
+        app.quit()
+
+    window.bridge.notification.connect(record_notification)
 
     menus = {action.text().replace("&", "") for action in window.menuBar().actions()}
     if menus != {"File", "Navigate", "View", "Tools", "Help"}:
@@ -52,16 +55,26 @@ def main() -> None:
     if window.windowTitle() != "Specter":
         raise RuntimeError("desktop window did not initialize")
 
+    def dispatch_when_ready(ready: object) -> None:
+        if bool(ready):
+            window.view.page().runJavaScript(
+                "window.dispatchEvent(new CustomEvent('specter:notification',"
+                "{detail:{title:'Bridge',message:'ready',level:'info'}}))"
+            )
+            return
+        QTimer.singleShot(100, poll_bridge)
+
+    def poll_bridge() -> None:
+        window.view.page().runJavaScript(
+            "Boolean(window.__specterDesktopBridgeReady)",
+            dispatch_when_ready,
+        )
+
+    window.view.stop()
     window.view.setHtml("<html><head></head><body>Specter desktop smoke</body></html>")
     window.show()
-    QTimer.singleShot(
-        750,
-        lambda: window.view.page().runJavaScript(
-            "window.dispatchEvent(new CustomEvent('specter:notification',"
-            "{detail:{title:'Bridge',message:'ready',level:'info'}}))"
-        ),
-    )
-    QTimer.singleShot(1500, app.quit)
+    QTimer.singleShot(0, poll_bridge)
+    QTimer.singleShot(10_000, app.quit)
     app.exec()
     window.shutdown()
     if notifications != [("Bridge", "ready", "info")]:
