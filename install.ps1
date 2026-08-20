@@ -32,7 +32,7 @@ function Find-Uv {
 
 $Uv = Find-Uv
 Write-Host "Installing osint-recon in an isolated user environment..."
-& $Uv tool install --force $PackageSpec
+& $Uv tool install --force --refresh-package osint-recon $PackageSpec
 if ($LASTEXITCODE -ne 0) {
     throw "osint-recon installation failed."
 }

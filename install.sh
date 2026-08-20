@@ -20,7 +20,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 printf 'Installing osint-recon in an isolated user environment...\n'
-uv tool install --force "$PACKAGE_SPEC"
+uv tool install --force --refresh-package osint-recon "$PACKAGE_SPEC"
 
 bin_directory="$(uv tool dir --bin)"
 printf 'Installed successfully. Future launches will check for updates automatically.\n'
