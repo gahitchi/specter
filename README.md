@@ -87,6 +87,19 @@ through the isolated package manager before starting; offline failures do not
 prevent startup. Pass `--no-update` or set `RECON_AUTO_UPDATE=0` to skip that
 check.
 
+You do not need to uninstall after changes are pushed. Run the same command on
+Windows and Arch Linux to refresh the installed Git branch immediately:
+
+```text
+specter --update
+```
+
+The normal `specter` command performs this check automatically before startup.
+Rerunning the platform installer is also safe and repairs the isolated
+environment in place. To remove the application binaries and environment on
+either platform, run `uv tool uninstall osint-recon`. Uninstalling the tool does
+not delete investigation databases or configuration.
+
 Python 3.10 through 3.14 is supported. The published CLI can also be installed
 in an isolated environment with `pipx`:
 

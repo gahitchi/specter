@@ -1,5 +1,8 @@
 """Alembic adopts a pre-migration SQLite database without losing its rows."""
 
+from concurrent.futures import ThreadPoolExecutor
+import threading
+
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -56,6 +59,22 @@ def test_database_is_at_packaged_migration_head(fresh_db):
         "observation_reviews", "source_health_checks", "audit_events",
         "job_activity_nodes",
     } <= tables
+
+
+def test_concurrent_sqlite_startup_serializes_migrations(tmp_path):
+    dsn = f"sqlite:///{tmp_path / 'concurrent.db'}"
+    ready = threading.Barrier(4)
+
+    def migrate() -> str | None:
+        with Database(dsn) as database:
+            ready.wait(timeout=5)
+            database.create_all()
+            return database.schema_revision()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        revisions = list(pool.map(lambda _index: migrate(), range(4)))
+
+    assert revisions == ["20260814_0004"] * 4
 
 
 def test_account_migration_upgrades_existing_sqlite_schema(tmp_path):

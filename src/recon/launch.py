@@ -71,12 +71,22 @@ def _spawn(args: list[str]) -> subprocess.Popen:
     return subprocess.Popen([sys.executable, "-m", "recon.cli", *args])  # nosec B603
 
 
+def _prepare_database() -> None:
+    from .store.db import Database, _default_dsn
+
+    with Database(_default_dsn()) as database:
+        database.ensure_schema(auto_upgrade=SETTINGS.auto_migrate)
+        database.ping()
+
+
 def main(argv: list[str] | None = None) -> None:
     launch_args = list(sys.argv[1:] if argv is None else argv)
     p = argparse.ArgumentParser(prog="specter", description="Wake osint-recon and open the dashboard.")
     p.add_argument("--no-browser", action="store_true", help="don't open Firefox")
     p.add_argument("--no-workers", action="store_true", help="server only (no worker/scheduler)")
-    p.add_argument("--no-update", action="store_true", help="skip the automatic update check")
+    update_mode = p.add_mutually_exclusive_group()
+    update_mode.add_argument("--no-update", action="store_true", help="skip the update check")
+    update_mode.add_argument("--update", action="store_true", help="install updates and exit")
     p.add_argument("--port", type=int, default=SETTINGS.port)
     args = p.parse_args(launch_args)
 
@@ -92,20 +102,30 @@ def main(argv: list[str] | None = None) -> None:
             open_firefox(url)
         return
 
-    update = auto_update(enabled=not args.no_update)
-    if update.message and (update.attempted or args.no_update):
+    update = auto_update(enabled=not args.no_update, force=args.update)
+    if update.message and (update.attempted or args.no_update or args.update):
         print(f"  {update.message}")
+    if args.update:
+        if not update.message:
+            print("  automatic updates are unavailable for this installation")
+        return
     if update.restart_required:
         print("  restarting with the updated application")
         restart(launch_args)
 
+    try:
+        _prepare_database()
+    except Exception as exc:
+        print(f"  database startup failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+
     procs: list[subprocess.Popen] = [_spawn(["serve"])]
-    if not args.no_workers:
-        procs.append(_spawn(["worker"]))
-        procs.append(_spawn(["monitor"]))
 
     if _wait_healthy(url):
         print(f"  dashboard ready at {url}")
+        if not args.no_workers:
+            procs.append(_spawn(["worker"]))
+            procs.append(_spawn(["monitor"]))
         if not args.no_browser:
             open_firefox(url)
             print("  opened Firefox tab")

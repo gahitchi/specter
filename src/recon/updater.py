@@ -59,7 +59,16 @@ def _update_command() -> tuple[list[str], str] | None:
     if uv:
         tool_dir = _command_output([uv, "tool", "dir"])
         if tool_dir and _within(Path(sys.prefix), Path(tool_dir)):
-            return [uv, "tool", "upgrade", PACKAGE_NAME, "--quiet", "--no-progress"], "uv"
+            return [
+                uv,
+                "tool",
+                "upgrade",
+                PACKAGE_NAME,
+                "--reinstall-package",
+                PACKAGE_NAME,
+                "--quiet",
+                "--no-progress",
+            ], "uv"
 
     pipx = shutil.which("pipx")
     if pipx:
@@ -82,9 +91,11 @@ def _installation_fingerprint() -> tuple[str, str | None]:
     return distribution.version, commit
 
 
-def auto_update(*, enabled: bool = True, timeout: float = 45.0) -> UpdateResult:
+def auto_update(
+    *, enabled: bool = True, force: bool = False, timeout: float = 45.0
+) -> UpdateResult:
     """Refresh an isolated tool install; failures never prevent local startup."""
-    if not enabled or not _env_enabled("RECON_AUTO_UPDATE"):
+    if not enabled or (not force and not _env_enabled("RECON_AUTO_UPDATE")):
         return UpdateResult(message="automatic updates disabled")
     if os.environ.get(_RESTART_ENV) == "1":
         return UpdateResult()

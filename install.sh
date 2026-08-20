@@ -25,6 +25,8 @@ uv tool install --force "$PACKAGE_SPEC"
 bin_directory="$(uv tool dir --bin)"
 printf 'Installed successfully. Future launches will check for updates automatically.\n'
 printf 'Launch at any time with: specter\n'
+printf 'Update or repair with: specter --update\n'
+printf 'Uninstall with: uv tool uninstall osint-recon\n'
 
 case ":$PATH:" in
   *":$bin_directory:"*) ;;

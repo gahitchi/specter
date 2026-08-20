@@ -41,6 +41,8 @@ $BinDirectory = (& $Uv tool dir --bin).Trim()
 $Specter = Join-Path $BinDirectory "specter.exe"
 Write-Host "Installed successfully. Future launches will check for updates automatically."
 Write-Host "Launch at any time with: specter"
+Write-Host "Update or repair with: specter --update"
+Write-Host "Uninstall with: uv tool uninstall osint-recon"
 
 if (-not $NoLaunch) {
     & $Specter --no-update

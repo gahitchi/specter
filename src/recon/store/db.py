@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import sqlite3
 from typing import Iterator, Optional
 
 from sqlalchemy import create_engine, event, text
@@ -20,7 +21,11 @@ from ..config import SETTINGS, env_value
 class Database:
     def __init__(self, dsn: str) -> None:
         self.dsn = dsn
-        connect_args = {"check_same_thread": False} if dsn.startswith("sqlite") else {}
+        connect_args = (
+            {"check_same_thread": False, "timeout": 30}
+            if dsn.startswith("sqlite")
+            else {}
+        )
         engine_options = {"future": True, "connect_args": connect_args}
         if not dsn.startswith("sqlite"):
             engine_options.update({
@@ -44,11 +49,17 @@ class Database:
         @event.listens_for(engine, "connect")
         def _set_pragmas(dbapi_conn, _record):  # pragma: no cover - driver callback
             cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA busy_timeout=5000")
-            cur.execute("PRAGMA synchronous=NORMAL")
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.close()
+            try:
+                cur.execute("PRAGMA busy_timeout=30000")
+                try:
+                    cur.execute("PRAGMA journal_mode=WAL")
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower():
+                        raise
+                cur.execute("PRAGMA synchronous=NORMAL")
+                cur.execute("PRAGMA foreign_keys=ON")
+            finally:
+                cur.close()
 
     def create_all(self) -> None:
         """Upgrade this database to the packaged Alembic head revision.
@@ -63,9 +74,27 @@ class Database:
         config = Config()
         config.set_main_option("script_location", str(migrations))
         config.set_main_option("sqlalchemy.url", self.dsn.replace("%", "%%"))
-        with self.engine.begin() as connection:
+
+        def upgrade(connection) -> None:
             config.attributes["connection"] = connection
             command.upgrade(config, "head")
+
+        with self.engine.connect() as connection:
+            if connection.dialect.name != "sqlite":
+                with connection.begin():
+                    upgrade(connection)
+                return
+
+            # Every local service validates migrations at startup. Serialize that
+            # check across processes so a fresh database cannot race while Alembic
+            # creates its version table or applies the first revision.
+            connection.exec_driver_sql("BEGIN EXCLUSIVE")
+            try:
+                upgrade(connection)
+            except Exception:
+                connection.rollback()
+                raise
+            connection.commit()
 
     def migration_head(self) -> str | None:
         from alembic.config import Config

@@ -17,6 +17,26 @@ def test_auto_update_can_be_disabled(monkeypatch):
     assert not result.restart_required
 
 
+def test_forced_update_overrides_disabled_automatic_checks(monkeypatch):
+    monkeypatch.setenv("RECON_AUTO_UPDATE", "0")
+    monkeypatch.setattr(
+        updater,
+        "_update_command",
+        lambda: (["uv", "tool", "upgrade"], "uv"),
+    )
+    monkeypatch.setattr(updater, "_installation_fingerprint", lambda: ("0.11.0", None))
+    monkeypatch.setattr(
+        updater.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""),
+    )
+
+    result = updater.auto_update(force=True)
+
+    assert result.attempted
+    assert result.message == "application is up to date"
+
+
 def test_auto_update_skips_development_checkout(monkeypatch):
     monkeypatch.delenv("RECON_AUTO_UPDATE", raising=False)
     monkeypatch.setattr(updater, "_update_command", lambda: None)
@@ -47,7 +67,16 @@ def test_update_command_uses_uv_for_its_own_tool_environment(monkeypatch, tmp_pa
     command = updater._update_command()
 
     assert command == (
-        ["uv", "tool", "upgrade", "osint-recon", "--quiet", "--no-progress"],
+        [
+            "uv",
+            "tool",
+            "upgrade",
+            "osint-recon",
+            "--reinstall-package",
+            "osint-recon",
+            "--quiet",
+            "--no-progress",
+        ],
         "uv",
     )
 
@@ -112,7 +141,7 @@ def test_launcher_restarts_updated_code_before_spawning_children(monkeypatch):
     monkeypatch.setattr(
         launch,
         "auto_update",
-        lambda *, enabled: updater.UpdateResult(True, True, "updated"),
+        lambda *, enabled, force=False: updater.UpdateResult(True, True, "updated"),
     )
     monkeypatch.setattr(
         launch,
@@ -130,6 +159,107 @@ def test_launcher_restarts_updated_code_before_spawning_children(monkeypatch):
         launch.main(["--no-browser", "--no-workers"])
 
     assert restarted == [["--no-browser", "--no-workers"]]
+
+
+def test_manual_update_exits_without_starting_services(monkeypatch, capsys):
+    from recon import launch
+
+    calls: list[tuple[bool, bool]] = []
+    monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
+    monkeypatch.setattr(
+        launch,
+        "auto_update",
+        lambda *, enabled, force=False: (
+            calls.append((enabled, force))
+            or updater.UpdateResult(True, True, "updated with uv: old -> new")
+        ),
+    )
+    monkeypatch.setattr(
+        launch,
+        "_prepare_database",
+        lambda: (_ for _ in ()).throw(AssertionError("database prepared during update")),
+    )
+    monkeypatch.setattr(
+        launch,
+        "_spawn",
+        lambda args: (_ for _ in ()).throw(AssertionError("service started during update")),
+    )
+
+    launch.main(["--update"])
+
+    assert calls == [(True, True)]
+    assert "updated with uv: old -> new" in capsys.readouterr().out
+
+
+def test_launcher_prepares_database_and_server_before_workers(monkeypatch):
+    from recon import launch
+
+    events: list[str] = []
+
+    class FinishedProcess:
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
+    monkeypatch.setattr(
+        launch,
+        "auto_update",
+        lambda *, enabled, force=False: updater.UpdateResult(),
+    )
+    monkeypatch.setattr(
+        launch,
+        "_prepare_database",
+        lambda: events.append("database"),
+    )
+    monkeypatch.setattr(
+        launch,
+        "_spawn",
+        lambda args: (events.append(f"spawn:{args[0]}") or FinishedProcess()),
+    )
+    monkeypatch.setattr(
+        launch,
+        "_wait_healthy",
+        lambda url: (events.append("healthy") or True),
+    )
+    monkeypatch.setattr(launch.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(launch.time, "sleep", lambda _seconds: None)
+
+    launch.main(["--no-browser"])
+
+    assert events == [
+        "database",
+        "spawn:serve",
+        "healthy",
+        "spawn:worker",
+        "spawn:monitor",
+    ]
+
+
+def test_launcher_does_not_spawn_when_database_preparation_fails(monkeypatch, capsys):
+    from recon import launch
+
+    monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
+    monkeypatch.setattr(
+        launch,
+        "auto_update",
+        lambda *, enabled, force=False: updater.UpdateResult(),
+    )
+    monkeypatch.setattr(
+        launch,
+        "_prepare_database",
+        lambda: (_ for _ in ()).throw(RuntimeError("migration unavailable")),
+    )
+    monkeypatch.setattr(
+        launch,
+        "_spawn",
+        lambda args: (_ for _ in ()).throw(AssertionError("spawned after database failure")),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        launch.main(["--no-browser"])
+
+    assert raised.value.code == 1
+    assert "database startup failed: migration unavailable" in capsys.readouterr().err
 
 
 def test_restart_sets_guard_and_preserves_arguments(monkeypatch):
