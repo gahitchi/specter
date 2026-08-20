@@ -38,6 +38,8 @@ They were not published releases; their changes are included in 0.11.0.
 - Evidence-backed profile synthesis with confirmed identifiers, public
   accounts, established attributes, coverage, confidence, and unresolved gaps;
   saved profiles are available through reports and a run-scoped API.
+- One-command, unprivileged installers for Windows PowerShell and Arch Linux,
+  plus non-fatal launch-time updates for isolated `uv` and `pipx` installs.
 
 ### Changed
 

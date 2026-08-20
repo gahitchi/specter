@@ -22,6 +22,7 @@ REQUIRED_WHEEL_FILES = {
     "recon/data/calibration_labels.json",
     "recon/data/sites.json",
     "recon/migrations/versions/20260814_0004_job_activity.py",
+    "recon/updater.py",
     "recon/web/app.js",
     "recon/web/index.html",
     "recon/web/style.css",
@@ -32,6 +33,8 @@ REQUIRED_SDIST_FILES = {
     "PRODUCTION.md",
     "README.md",
     "RELEASING.md",
+    "install.ps1",
+    "install.sh",
     "pyproject.toml",
 }
 PROJECT_URLS = {"Homepage", "Documentation", "Repository", "Issues", "Changelog"}
@@ -73,6 +76,15 @@ def _version_from_source() -> str:
 
 def _is_release_version(value: str) -> bool:
     return RELEASE_VERSION.fullmatch(value) is not None
+
+
+def _tag_from_environment() -> str | None:
+    ref = os.environ.get("GITHUB_REF", "")
+    if os.environ.get("GITHUB_REF_TYPE") == "tag":
+        return os.environ.get("GITHUB_REF_NAME")
+    if ref.startswith("refs/tags/"):
+        return ref.removeprefix("refs/tags/")
+    return None
 
 
 def _normalized_archive_names(names: list[str]) -> set[str]:
@@ -196,7 +208,7 @@ def validate(dist_dir: Path, tag: str | None = None) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dist-dir", type=Path, default=ROOT / "dist")
-    parser.add_argument("--tag", default=os.environ.get("GITHUB_REF_NAME"))
+    parser.add_argument("--tag", default=_tag_from_environment())
     args = parser.parse_args()
 
     errors = validate(args.dist_dir.resolve(), args.tag)

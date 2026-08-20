@@ -65,8 +65,30 @@ for the security model and reporting process.
 
 ## Quick start
 
-Python 3.10 through 3.14 is supported. Install the published CLI in an isolated
-environment with `pipx`:
+Install and launch the complete local application with one command. The
+installer creates an isolated user environment and installs `uv` when needed;
+administrator or root access is not required.
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/install.ps1 | iex
+```
+
+Arch Linux:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/install.sh | bash
+```
+
+The installer opens the dashboard. Later, run `specter` to start the dashboard,
+worker, and monitor together. Each fresh `specter` startup checks for an update
+through the isolated package manager before starting; offline failures do not
+prevent startup. Pass `--no-update` or set `RECON_AUTO_UPDATE=0` to skip that
+check.
+
+Python 3.10 through 3.14 is supported. The published CLI can also be installed
+in an isolated environment with `pipx`:
 
 ```bash
 pipx install osint-recon
@@ -97,7 +119,8 @@ uv run recon serve
 ```
 
 `uv run specter` starts the dashboard, local worker, and monitor together.
-Use `--no-browser` or `--no-workers` when appropriate.
+Development checkouts do not update themselves. Use `--no-browser`,
+`--no-workers`, or `--no-update` when appropriate.
 
 ### One starting value
 

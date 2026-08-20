@@ -8,7 +8,8 @@ from __future__ import annotations
 import datetime as dt
 from typing import Optional
 
-from sqlalchemy import delete, select
+from sqlalchemy import cast, delete, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from ..models import Finding, Query
@@ -21,11 +22,17 @@ def _now() -> dt.datetime:
 
 # --- Targets ---------------------------------------------------------------
 
+def _target_query_predicate(query: dict, dialect_name: str):
+    column = cast(m.Target.query, JSONB) if dialect_name == "postgresql" else m.Target.query
+    return column == query
+
+
 def get_or_create_target(s: Session, query: Query, label: str | None = None,
                          watchlist: bool = False, owner_id: int | None = None) -> m.Target:
     q = query.normalized().model_dump(exclude_none=True)
+    query_matches = _target_query_predicate(q, s.get_bind().dialect.name)
     existing = s.execute(
-        select(m.Target).where(m.Target.query == q, m.Target.owner_id == owner_id)
+        select(m.Target).where(query_matches, m.Target.owner_id == owner_id)
     ).scalars().first()
     if existing:
         if watchlist and not existing.watchlist:

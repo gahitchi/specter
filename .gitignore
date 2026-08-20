@@ -30,6 +30,7 @@ audit-requirements.txt
 .env
 .env.*
 !.env.example
+!/deploy/.env.production.example
 *.key
 *.pem
 *.p12

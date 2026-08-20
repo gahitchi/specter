@@ -1,8 +1,11 @@
 """Alembic adopts a pre-migration SQLite database without losing its rows."""
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from recon.store.db import Database
+from recon.store import models_db
+from recon.store.repo import _target_query_predicate
 
 _OLD_OBSERVATIONS = """
 CREATE TABLE observations (
@@ -12,6 +15,14 @@ CREATE TABLE observations (
   fingerprint TEXT, reliability FLOAT, created_at DATETIME
 )
 """
+
+
+def test_postgres_target_query_comparison_casts_json_to_jsonb():
+    predicate = _target_query_predicate({"username": "alice"}, "postgresql")
+    statement = sa.select(models_db.Target).where(predicate)
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "CAST(targets.query AS JSONB)" in compiled
 
 
 def test_backfill_adds_missing_column_preserving_rows(tmp_path):

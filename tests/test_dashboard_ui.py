@@ -71,8 +71,10 @@ def test_dashboard_exposes_scan_feedback_and_filters() -> None:
 def test_dashboard_assets_are_local_and_revisioned() -> None:
     dashboard = dashboard_markup()
     web_root = files("recon").joinpath("web")
-    style_hash = sha256(web_root.joinpath("style.css").read_bytes()).hexdigest()[:12]
-    script_hash = sha256(web_root.joinpath("app.js").read_bytes()).hexdigest()[:12]
+    style_bytes = web_root.joinpath("style.css").read_bytes().replace(b"\r\n", b"\n")
+    script_bytes = web_root.joinpath("app.js").read_bytes().replace(b"\r\n", b"\n")
+    style_hash = sha256(style_bytes).hexdigest()[:12]
+    script_hash = sha256(script_bytes).hexdigest()[:12]
 
     assert dashboard.assets == [
         f"/static/style.css?v={style_hash}",

@@ -38,11 +38,18 @@ jobs:
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
-      - run: uv sync --locked --extra dev
+      - run: uv sync --locked --extra dev --extra ml
       - run: uv run ruff check .
       - run: uv run pytest -q
       - run: uv run python -m recon.cli --help
       - run: uv run python -c "from recon.sources import validate_contracts; assert not validate_contracts()"
+      - name: Validate Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '[scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null'
+      - name: Validate Arch Linux installer
+        if: runner.os == 'Linux' && matrix.python-version == '3.12'
+        run: bash -n install.sh
 
   package-and-audit:
     runs-on: ubuntu-latest
@@ -64,10 +71,10 @@ jobs:
           uv run python -c "import glob, zipfile;
           wheel=glob.glob('dist/*.whl')[-1];
           names=set(zipfile.ZipFile(wheel).namelist());
-          required={'recon/web/index.html','recon/web/app.js','recon/web/style.css','recon/data/sites.json','recon/data/calibration_labels.json','recon/migrations/versions/20260813_0001_maturity_schema.py','recon/migrations/versions/20260814_0004_job_activity.py'};
+          required={'recon/updater.py','recon/web/index.html','recon/web/app.js','recon/web/style.css','recon/data/sites.json','recon/data/calibration_labels.json','recon/migrations/versions/20260813_0001_maturity_schema.py','recon/migrations/versions/20260814_0004_job_activity.py'};
           assert required <= names, required-names"
       - name: Validate operator scripts
-        run: sh -n scripts/backup-postgres.sh scripts/restore-postgres.sh
+        run: sh -n install.sh scripts/backup-postgres.sh scripts/restore-postgres.sh
       - run: uv run bandit -q -c pyproject.toml -r src scripts
       - name: Audit locked runtime dependencies
         run: |

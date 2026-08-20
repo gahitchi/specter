@@ -20,6 +20,7 @@ import urllib.request
 import webbrowser
 
 from .config import SETTINGS
+from .updater import auto_update, restart
 
 BANNER = r"""
    ____                 _
@@ -70,12 +71,14 @@ def _spawn(args: list[str]) -> subprocess.Popen:
     return subprocess.Popen([sys.executable, "-m", "recon.cli", *args])  # nosec B603
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    launch_args = list(sys.argv[1:] if argv is None else argv)
     p = argparse.ArgumentParser(prog="specter", description="Wake osint-recon and open the dashboard.")
     p.add_argument("--no-browser", action="store_true", help="don't open Firefox")
     p.add_argument("--no-workers", action="store_true", help="server only (no worker/scheduler)")
+    p.add_argument("--no-update", action="store_true", help="skip the automatic update check")
     p.add_argument("--port", type=int, default=SETTINGS.port)
-    args = p.parse_args()
+    args = p.parse_args(launch_args)
 
     host, port = SETTINGS.host, args.port
     url = f"http://{host}:{port}"
@@ -88,6 +91,13 @@ def main() -> None:
         if not args.no_browser:
             open_firefox(url)
         return
+
+    update = auto_update(enabled=not args.no_update)
+    if update.message and (update.attempted or args.no_update):
+        print(f"  {update.message}")
+    if update.restart_required:
+        print("  restarting with the updated application")
+        restart(launch_args)
 
     procs: list[subprocess.Popen] = [_spawn(["serve"])]
     if not args.no_workers:
