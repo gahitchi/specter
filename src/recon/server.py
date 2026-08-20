@@ -490,8 +490,8 @@ async def api_create_user(request: Request, payload: UserPayload) -> JSONRespons
                 detail={"username": user.username, "role": user.role},
             )
             return JSONResponse(_row(user, ("id", "username", "display_name", "role", "active")))
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+    except ValueError:
+        return JSONResponse({"error": "invalid user details"}, status_code=400)
 
 
 @app.patch("/api/users/{user_id}")
@@ -529,8 +529,8 @@ async def api_update_user(
                         "password_reset": payload.password is not None},
             )
             return JSONResponse(_row(user, ("id", "username", "display_name", "role", "active")))
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+    except ValueError:
+        return JSONResponse({"error": "invalid user update"}, status_code=400)
 
 
 @app.get("/api/expansion")
@@ -585,8 +585,8 @@ async def api_pair_review(request: Request, payload: PairReviewPayload) -> JSONR
                 "features": row.features,
                 "created_at": row.created_at.isoformat(),
             })
-    except (LookupError, ValueError) as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+    except (LookupError, ValueError):
+        return JSONResponse({"error": "invalid pair review"}, status_code=400)
 
 
 @app.get("/")
@@ -886,8 +886,8 @@ async def api_review_observation(
                                 "decision", "note", "reviewer")),
                 "created_at": review.created_at.isoformat(),
             })
-    except LookupError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=404)
+    except LookupError:
+        return JSONResponse({"error": "observation not found"}, status_code=404)
 
 
 @app.get("/api/reviews")
@@ -1186,8 +1186,8 @@ async def api_target_export(
                 detail={"redacted": payload.redacted},
             )
             return JSONResponse(exported)
-    except LookupError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=404)
+    except LookupError:
+        return JSONResponse({"error": "target not found"}, status_code=404)
 
 
 @app.delete("/api/targets/{target_id}")
@@ -1206,8 +1206,8 @@ async def api_delete_target(request: Request, target_id: int, payload: DeletePay
                 actor_user_id=principal.user_id,
             )
             return JSONResponse({"target_id": target_id, "deleted": deleted})
-    except LookupError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=404)
+    except LookupError:
+        return JSONResponse({"error": "target not found"}, status_code=404)
 
 
 @app.post("/api/retention")

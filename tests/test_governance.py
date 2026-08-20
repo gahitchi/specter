@@ -4,6 +4,7 @@ import json
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from recon import governance
 from recon.governance import (
     apply_retention,
     purge_target,
@@ -69,10 +70,59 @@ def test_review_api_roundtrip_and_missing_observation():
     assert response.status_code == 200
     body = client.get(f"/api/runs/{run_id}/observations").json()
     assert body["observations"][0]["review"]["decision"] == "rejected"
-    assert client.post(
+    missing = client.post(
         "/api/observations/999999/review",
         json={"decision": "accepted"},
-    ).status_code == 404
+    )
+    assert missing.status_code == 404
+    assert missing.json() == {"error": "observation not found"}
+
+
+def test_governance_errors_do_not_expose_exception_details(monkeypatch):
+    pair = client.post(
+        "/api/pair-reviews",
+        json={
+            "left_observation_id": 999998,
+            "right_observation_id": 999999,
+            "same_identity": False,
+            "verification_method": "manual review",
+        },
+    )
+    assert pair.status_code == 400
+    assert pair.json() == {"error": "invalid pair review"}
+
+    with get_db().session() as session:
+        target = repo.get_or_create_target(session, Query(username="error-test"))
+        target_id = target.id
+
+    original_export = governance.target_export
+
+    def reject_export(*_args, **_kwargs):
+        raise LookupError("sensitive export backend detail")
+
+    monkeypatch.setattr(governance, "target_export", reject_export)
+    exported = client.post(
+        f"/api/targets/{target_id}/export",
+        json={"redacted": True},
+    )
+    assert exported.status_code == 404
+    assert exported.json() == {"error": "target not found"}
+    assert "sensitive" not in exported.text
+
+    monkeypatch.setattr(governance, "target_export", original_export)
+
+    def reject_purge(*_args, **_kwargs):
+        raise LookupError("sensitive purge backend detail")
+
+    monkeypatch.setattr(governance, "purge_target", reject_purge)
+    deleted = client.request(
+        "DELETE",
+        f"/api/targets/{target_id}",
+        json={"confirm": True},
+    )
+    assert deleted.status_code == 404
+    assert deleted.json() == {"error": "target not found"}
+    assert "sensitive" not in deleted.text
 
 
 def test_redacted_export_omits_investigation_content():

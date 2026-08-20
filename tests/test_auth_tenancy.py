@@ -2,7 +2,7 @@ import dataclasses
 
 from fastapi.testclient import TestClient
 
-from recon import server
+from recon import auth, server
 from recon.auth import create_user
 from recon.models import Query
 from recon.store import get_db, repo
@@ -84,6 +84,38 @@ def test_invalid_login_is_generic_and_does_not_create_session(monkeypatch):
         assert response.status_code == 401
         assert response.json() == {"error": "invalid credentials"}
         assert "recon_session" not in response.cookies
+
+
+def test_account_mutation_errors_do_not_expose_exception_details(monkeypatch):
+    monkeypatch.setattr(server, "_validate_service_mode", lambda: None)
+    with get_db().session() as session:
+        user = create_user(session, "existing-user", "very strong user password")
+        user_id = user.id
+
+    with TestClient(server.app) as client:
+        duplicate = client.post(
+            "/api/users",
+            json={
+                "username": "existing-user",
+                "password": "another strong password",
+                "role": "analyst",
+            },
+        )
+        assert duplicate.status_code == 400
+        assert duplicate.json() == {"error": "invalid user details"}
+        assert "existing-user" not in duplicate.json()["error"]
+
+        def reject_password(*_args, **_kwargs):
+            raise ValueError("sensitive password backend detail")
+
+        monkeypatch.setattr(auth, "set_password", reject_password)
+        update = client.patch(
+            f"/api/users/{user_id}",
+            json={"password": "replacement password"},
+        )
+        assert update.status_code == 400
+        assert update.json() == {"error": "invalid user update"}
+        assert "sensitive" not in update.text
 
 
 def test_remote_mode_refuses_plain_http_before_serving_login(monkeypatch):

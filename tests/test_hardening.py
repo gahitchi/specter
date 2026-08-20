@@ -2,6 +2,7 @@
 
 import dataclasses
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -87,7 +88,7 @@ async def test_name_collector_uses_managed_client_and_propagates_budget():
 
         async def fetch(self, url, **kwargs):
             self.calls.append((url, kwargs))
-            if "orcid.org" in url:
+            if urlsplit(url).hostname == "pub.orcid.org":
                 return httpx.Response(200, json={"expanded-result": []})
             return httpx.Response(200, json={"results": []})
 
