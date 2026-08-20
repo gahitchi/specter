@@ -110,8 +110,8 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked --extra postgres --extra dev
-      - run: uv run recon db-upgrade
-      - run: uv run recon db-check
+      - run: uv run specter db-upgrade
+      - run: uv run specter db-check
       - run: uv run python scripts/postgres_smoke.py
 
   container:
@@ -125,6 +125,6 @@ jobs:
           for source in deploy/secrets/*.example; do cp "$source" "${source%.example}"; done
           docker compose -f compose.production.yaml config --quiet
       - name: Build production image
-        run: docker build --tag osint-recon:ci .
+        run: docker build --tag specter:ci .
       - name: Smoke-test image entrypoint
-        run: docker run --rm osint-recon:ci --help
+        run: docker run --rm specter:ci --help

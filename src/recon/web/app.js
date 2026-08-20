@@ -86,7 +86,7 @@ function activateTab(button, updateHash = true) {
   const title = button.dataset.title || button.textContent.trim();
   $("#page-title").textContent = title;
   $("#page-context").textContent = button.dataset.context || "Workspace";
-  document.title = `${title} · osint-recon`;
+  document.title = `${title} - Specter`;
   if (updateHash) history.replaceState(null, "", `#${button.dataset.tab}`);
   loadTabData(button.dataset.tab);
 }
@@ -1438,7 +1438,7 @@ async function loadInsights(){
 async function loadCalibration(){
   const d = await (await fetch("/api/calibration")).json();
   const r = d.latest;
-  if (!r || !r.n) { $("#calibration").innerHTML = "<p class='tag'>No calibration runs yet — run <code>recon calibrate</code>.</p>"; return; }
+  if (!r || !r.n) { $("#calibration").innerHTML = "<p class='tag'>No calibration runs yet - run <code>specter calibrate</code>.</p>"; return; }
   const bins = (r.bins || []).filter(b => b.count).map(b => {
     const w = Math.round((b.empirical || 0) * 100);
     return `<tr><td>${b.lo.toFixed(1)}–${b.hi.toFixed(1)}</td><td>${b.count}</td>`

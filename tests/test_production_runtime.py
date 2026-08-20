@@ -58,7 +58,7 @@ def test_production_defaults_and_secret_file(monkeypatch, tmp_path):
 def test_schema_check_fails_closed_without_explicit_upgrade(tmp_path):
     dsn = f"sqlite:///{tmp_path / 'empty.db'}"
     with Database(dsn) as db:
-        with pytest.raises(RuntimeError, match="recon db-upgrade"):
+        with pytest.raises(RuntimeError, match="specter db-upgrade"):
             db.ensure_schema(auto_upgrade=False)
         db.create_all()
         db.ensure_schema(auto_upgrade=False)

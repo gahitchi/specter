@@ -53,7 +53,6 @@ jobs:
         run: |
           uv venv /tmp/osint-recon-release --python 3.12
           uv pip install --python /tmp/osint-recon-release/bin/python dist/*.whl
-          /tmp/osint-recon-release/bin/recon --help
           /tmp/osint-recon-release/bin/specter --help
       - name: Create checksums
         run: sha256sum dist/*.whl dist/*.tar.gz > dist/SHA256SUMS
@@ -86,8 +85,8 @@ jobs:
           docker build \
             --build-arg VERSION="${GITHUB_REF_NAME#v}" \
             --build-arg VCS_REF="$GITHUB_SHA" \
-            --tag osint-recon:release .
-          docker run --rm osint-recon:release --help
+            --tag specter:release .
+          docker run --rm specter:release --help
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -145,4 +144,4 @@ jobs:
           --verify-tag
           --generate-notes
           --prerelease
-          --title "osint-recon ${GITHUB_REF_NAME#v}"
+          --title "Specter ${GITHUB_REF_NAME#v}"

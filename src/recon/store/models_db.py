@@ -355,7 +355,7 @@ class ArtifactEdge(Base):
 
 
 class CalibrationRun(Base):
-    """One execution of `recon calibrate`: the calibration metrics of the verify
+    """One execution of `specter calibrate`: the calibration metrics of the verify
     engine against ground-truth labels at a point in time (Phase 5c)."""
 
     __tablename__ = "calibration_runs"

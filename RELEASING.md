@@ -33,7 +33,7 @@ release; package-name availability can change at any time.
 3. Back up and upgrade copies of real pre-release SQLite and PostgreSQL
    databases. Record successful recovery point and recovery time tests.
 4. Run explicitly authorized designated source canaries once and inspect
-   failures rather than retrying until green. Run `recon maturity`; high-risk
+   failures rather than retrying until green. Run `specter maturity`; high-risk
    expansion releases require `READY`.
 5. For expansion releases, verify tenant-isolation and CSRF tests, inspect
    held-out model metrics, test the sanitized source-pack manifest, and start
@@ -61,7 +61,7 @@ uv run python scripts/release_check.py --dist-dir dist
    commit, then create and push an annotated tag:
 
 ```bash
-git tag -a vX.Y.Z -m "osint-recon vX.Y.Z"
+git tag -a vX.Y.Z -m "Specter vX.Y.Z"
 git push origin vX.Y.Z
 ```
 

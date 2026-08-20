@@ -219,7 +219,7 @@ async def _lifespan(_app):
 
 
 app = FastAPI(
-    title="osint-recon",
+    title="Specter",
     version=__version__,
     lifespan=_lifespan,
     docs_url=None if SETTINGS.production_mode else "/docs",

@@ -31,17 +31,17 @@ function Find-Uv {
 }
 
 $Uv = Find-Uv
-Write-Host "Installing osint-recon in an isolated user environment..."
+Write-Host "Installing Specter in an isolated user environment..."
 & $Uv tool install --force --refresh-package osint-recon $PackageSpec
 if ($LASTEXITCODE -ne 0) {
-    throw "osint-recon installation failed."
+    throw "Specter installation failed."
 }
 
 $BinDirectory = (& $Uv tool dir --bin).Trim()
 $Specter = Join-Path $BinDirectory "specter.exe"
-Write-Host "Installed successfully. Future launches will check for updates automatically."
+Write-Host "Specter installed successfully. While running, it checks for updates every 5 minutes."
 Write-Host "Launch at any time with: specter"
-Write-Host "Update or repair with: specter --update"
+Write-Host "Apply a downloaded update with: specter --update"
 Write-Host "Uninstall with: uv tool uninstall osint-recon"
 
 if (-not $NoLaunch) {

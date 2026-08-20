@@ -17,7 +17,7 @@ FROM python:3.12-slim-bookworm@sha256:a116514e19457bcb7af7efe9c3dd0b9b71e85b3176
 ARG VERSION=0.11.0
 ARG VCS_REF=unknown
 
-LABEL org.opencontainers.image.title="osint-recon" \
+LABEL org.opencontainers.image.title="Specter" \
       org.opencontainers.image.description="Evidence-aware OSINT research framework for authorized investigations" \
       org.opencontainers.image.source="https://github.com/gahitchi/osint-recon" \
       org.opencontainers.image.documentation="https://github.com/gahitchi/osint-recon/blob/main/PRODUCTION.md" \

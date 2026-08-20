@@ -1,1 +1,1 @@
-"""Alembic migration environment packaged with osint-recon."""
+"""Alembic migration environment packaged with Specter."""

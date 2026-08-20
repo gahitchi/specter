@@ -38,11 +38,15 @@ They were not published releases; their changes are included in 0.11.0.
 - Evidence-backed profile synthesis with confirmed identifiers, public
   accounts, established attributes, coverage, confidence, and unresolved gaps;
   saved profiles are available through reports and a run-scoped API.
-- One-command, unprivileged installers for Windows PowerShell and Arch Linux,
-  plus non-fatal launch-time updates for isolated `uv` and `pipx` installs.
+- One-command, unprivileged installers for Windows PowerShell and Arch Linux.
+- A non-disruptive update monitor for isolated `uv` and `pipx` installs. It
+  checks GitHub every five minutes, downloads immutable revisions to a local
+  cache, and applies them only after an explicit `specter --update` command.
 
 ### Changed
 
+- Specter is now the product name and primary command. Legacy package, command,
+  import, configuration, and infrastructure identifiers remain compatible.
 - The dashboard now uses a responsive operations workspace with grouped
   navigation, clearer scan states, accessible page context, verdict filtering,
   denser evidence views, a responsive live graph, and content-revisioned assets.
@@ -93,7 +97,7 @@ They were not published releases; their changes are included in 0.11.0.
 - Immutable investigator reviews, review history, audit events, and reviewed
   calibration-label export.
 - Explicit source contracts and opt-in designated-account canary checks.
-- A measurable `recon maturity` gate for calibration and source health.
+- A measurable `specter maturity` gate for calibration and source health.
 - Redacted target exports, optional AES-GCM encrypted exports, retention
   previews, and complete subject deletion.
 - Optional operating-system keyring storage.

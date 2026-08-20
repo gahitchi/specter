@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the `specter` terminal command: wakes the whole osint-recon stack
+# Install the `specter` terminal command: wakes the whole Specter stack
 # (server + worker + scheduler) and opens the dashboard in a Firefox tab.
 #
 # Usage:  ./scripts/install-specter.sh
@@ -18,7 +18,7 @@ fi
 mkdir -p "$BIN"
 cat > "$BIN/specter" <<EOF
 #!/usr/bin/env bash
-# osint-recon launcher — wakes the stack and opens the dashboard in Firefox.
+# Specter launcher - wakes the stack and opens the dashboard in Firefox.
 exec "$VENV/bin/specter" "\$@"
 EOF
 chmod +x "$BIN/specter"

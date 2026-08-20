@@ -80,3 +80,11 @@ def test_dashboard_assets_are_local_and_revisioned() -> None:
         f"/static/style.css?v={style_hash}",
         f"/static/app.js?v={script_hash}",
     ]
+
+
+def test_dashboard_uses_specter_branding() -> None:
+    markup = files("recon").joinpath("web/index.html").read_text(encoding="utf-8")
+
+    assert "Specter" in markup
+    assert ">SP<" in markup
+    assert "osint-recon" not in markup

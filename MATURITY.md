@@ -2,7 +2,7 @@
 
 Broader source packs, machine-learning identity review, network-exposed
 dashboards, and multi-user features are implemented but remain blocked until
-`recon maturity` reports `READY`. This is an evidence gate, not a roadmap
+`specter maturity` reports `READY`. This is an evidence gate, not a roadmap
 estimate, and `RECON_ENABLE_EXPANSION=1` cannot override it.
 
 The automated gate requires:
@@ -17,7 +17,7 @@ The automated gate requires:
 
 Ground truth must be independently verified. Do not duplicate rows, generate
 synthetic positives, or label the tool's own verdict as truth to satisfy the
-threshold. Investigator decisions can be exported with `recon review-labels`,
+threshold. Investigator decisions can be exported with `specter review-labels`,
 but the operator remains responsible for verification and representative
 sampling.
 

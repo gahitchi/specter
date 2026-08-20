@@ -19,13 +19,13 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-printf 'Installing osint-recon in an isolated user environment...\n'
+printf 'Installing Specter in an isolated user environment...\n'
 uv tool install --force --refresh-package osint-recon "$PACKAGE_SPEC"
 
 bin_directory="$(uv tool dir --bin)"
-printf 'Installed successfully. Future launches will check for updates automatically.\n'
+printf 'Specter installed successfully. While running, it checks for updates every 5 minutes.\n'
 printf 'Launch at any time with: specter\n'
-printf 'Update or repair with: specter --update\n'
+printf 'Apply a downloaded update with: specter --update\n'
 printf 'Uninstall with: uv tool uninstall osint-recon\n'
 
 case ":$PATH:" in

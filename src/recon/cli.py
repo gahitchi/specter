@@ -1,14 +1,14 @@
 """Command-line entry point.
 
-  recon scan torvalds [--format json] [--watch "0 */6 * * *"]
-  recon serve            # local web dashboard + API
-  recon worker           # process queued scan jobs (run N of these to scale)
-  recon monitor          # run the cron scheduler for watch-listed targets
-  recon review           # record an investigator decision
-  recon maturity         # check whether high-risk expansion is unblocked
-  recon targets|runs|changes|sources   # inspect stored investigation data
+  specter scan torvalds [--format json] [--watch "0 */6 * * *"]
+  specter serve            # local web dashboard + API
+  specter worker           # process queued scan jobs (run N of these to scale)
+  specter monitor          # run the cron scheduler for watch-listed targets
+  specter review           # record an investigator decision
+  specter maturity         # check whether high-risk expansion is unblocked
+  specter targets|runs|changes|sources   # inspect stored investigation data
 
-Back-compat: `recon --username x` (no subcommand) defaults to `scan`.
+Back-compat: the legacy `recon` entry point remains available.
 """
 
 from __future__ import annotations
@@ -179,7 +179,7 @@ async def _cmd_scan(args) -> int:
             db = get_db()
             with db.session() as s:
                 repo.create_schedule(s, result["target_id"], args.watch)
-            print(f"watch scheduled: '{args.watch}' (run `recon monitor`)", file=sys.stderr)
+            print(f"watch scheduled: '{args.watch}' (run `specter monitor`)", file=sys.stderr)
 
     if args.format:
         path = reporting.save(query.normalized(), findings, summary, args.format, args.out)
@@ -750,7 +750,7 @@ def _cmd_source_pack(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="recon", description="Local-first OSINT research framework."
+        prog="specter", description="Specter local-first OSINT research framework."
     )
     sub = p.add_subparsers(dest="cmd")
 
@@ -894,8 +894,8 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main() -> None:
-    argv = sys.argv[1:]
+def main(argv: list[str] | None = None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
     # Back-compat: bare flags -> scan.
     if argv and argv[0].startswith("-") and argv[0] not in ("-h", "--help"):
         argv = ["scan", *argv]

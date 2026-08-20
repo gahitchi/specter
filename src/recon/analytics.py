@@ -4,7 +4,7 @@ independence classes, and calibration history — into a few honest summaries.
 
 The aggregation functions are pure (they take iterables of rows), so they unit-
 test without a database; `compute(db)` wires them to the persisted tables and
-backs `GET /api/analytics`, `recon analytics`, and the dashboard's Confidence tab.
+backs `GET /api/analytics`, `specter analytics`, and the dashboard's Confidence tab.
 """
 
 from __future__ import annotations

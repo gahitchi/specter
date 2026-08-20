@@ -29,7 +29,7 @@ def test_to_json_embeds_provenance_and_reasons():
     q = Query(username="torvalds")
     payload = json.loads(reporting.to_json(q, _findings(), {"hits": 1}))
 
-    assert payload["tool"] == "osint-recon"
+    assert payload["tool"] == "Specter"
     assert payload["query"] == {"username": "torvalds"}
     assert payload["summary"] == {"hits": 1}
     # provenance block is present and stamps the tool version.

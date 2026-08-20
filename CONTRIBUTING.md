@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for improving `osint-recon`. Contributions should preserve its core
+Thank you for improving Specter. Contributions should preserve its core
 principles: authorized use, bounded collection, evidence provenance, explicit
 uncertainty, and fail-closed production behavior.
 

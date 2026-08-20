@@ -40,7 +40,7 @@ def encrypt(data: bytes, passphrase: str) -> bytes:
 def decrypt(data: bytes, passphrase: str) -> bytes:
     aesgcm, _scrypt = _primitives()
     if not data.startswith(_MAGIC):
-        raise ValueError("not an osint-recon encrypted export")
+        raise ValueError("not a Specter encrypted export")
     offset = len(_MAGIC)
     salt = data[offset:offset + _SALT_BYTES]
     nonce = data[offset + _SALT_BYTES:offset + _SALT_BYTES + _NONCE_BYTES]

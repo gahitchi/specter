@@ -69,7 +69,7 @@ class Settings:
 
     # --- HTTP ---
     user_agent: str = (
-        f"osint-recon/{__version__} "
+        f"Specter/{__version__} "
         "(+https://github.com/gahitchi/osint-recon; authorized research only)"
     )
     request_timeout: float = 12.0

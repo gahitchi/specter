@@ -1,197 +1,360 @@
 from __future__ import annotations
 
+import io
+import json
+from pathlib import Path
 import subprocess
+import tarfile
+import time
 
 import pytest
 
 from recon import updater
 
+REVISION_A = "a" * 40
+REVISION_B = "b" * 40
 
-def test_auto_update_can_be_disabled(monkeypatch):
+
+@pytest.fixture
+def update_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("SPECTER_UPDATE_DIR", str(tmp_path / "updates"))
+    monkeypatch.delenv("RECON_AUTO_UPDATE", raising=False)
+    monkeypatch.delenv("RECON_ENV", raising=False)
+    monkeypatch.setattr(updater, "_installation_manager", lambda: ("uv", "uv"))
+    return tmp_path / "updates"
+
+
+def _cached_project(root: Path, revision: str) -> Path:
+    project = root / revision
+    project.mkdir(parents=True)
+    (project / "pyproject.toml").write_text("[project]\nname='osint-recon'\n", encoding="utf-8")
+    (root / "pending.json").write_text(json.dumps({"revision": revision}), encoding="utf-8")
+    return project
+
+
+def _tar_response(entries: dict[str, bytes], *, size: str | None = None):
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+        for name, content in entries.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            member.mode = 0o644
+            archive.addfile(member, io.BytesIO(content))
+    payload.seek(0)
+
+    class Response(io.BytesIO):
+        def __init__(self, content):
+            super().__init__(content)
+            self.headers = {"Content-Length": size or str(len(content))}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    return Response(payload.read())
+
+
+def test_update_check_can_be_disabled(monkeypatch):
     monkeypatch.setenv("RECON_AUTO_UPDATE", "0")
-    monkeypatch.setattr(updater, "_update_command", lambda: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(
+        updater, "_installation_manager", lambda: (_ for _ in ()).throw(AssertionError)
+    )
 
-    result = updater.auto_update()
+    result = updater.check_for_update()
 
     assert not result.attempted
-    assert not result.restart_required
+    assert result.message == "update checks disabled"
 
 
-def test_forced_update_overrides_disabled_automatic_checks(monkeypatch):
+def test_forced_check_overrides_disabled_setting(monkeypatch, update_environment):
     monkeypatch.setenv("RECON_AUTO_UPDATE", "0")
-    monkeypatch.setattr(
-        updater,
-        "_update_command",
-        lambda: (["uv", "tool", "upgrade"], "uv"),
-    )
-    monkeypatch.setattr(updater, "_installation_fingerprint", lambda: ("0.11.0", None))
-    monkeypatch.setattr(
-        updater.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""),
-    )
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
+    monkeypatch.setattr(updater, "_remote_revision", lambda timeout: REVISION_A)
 
-    result = updater.auto_update(force=True)
+    result = updater.check_for_update(force=True)
 
     assert result.attempted
-    assert result.message == "application is up to date"
+    assert result.message == "Specter is up to date"
 
 
-def test_auto_update_skips_development_checkout(monkeypatch):
-    monkeypatch.delenv("RECON_AUTO_UPDATE", raising=False)
-    monkeypatch.setattr(updater, "_update_command", lambda: None)
-
-    result = updater.auto_update()
-
-    assert not result.attempted
-    assert not result.restart_required
-
-
-def test_auto_update_skips_production_runtime(monkeypatch):
+def test_update_check_skips_production(monkeypatch):
     monkeypatch.setenv("RECON_ENV", "production")
-    monkeypatch.setattr(updater, "_update_command", lambda: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(
+        updater, "_installation_manager", lambda: (_ for _ in ()).throw(AssertionError)
+    )
 
-    result = updater.auto_update()
+    result = updater.check_for_update()
 
     assert not result.attempted
-    assert not result.restart_required
+    assert "production" in result.message
 
 
-def test_update_command_uses_uv_for_its_own_tool_environment(monkeypatch, tmp_path):
+def test_update_check_skips_development_checkout(monkeypatch):
+    monkeypatch.setattr(updater, "_installation_manager", lambda: None)
+
+    result = updater.check_for_update()
+
+    assert not result.attempted
+    assert not result.message
+
+
+def test_installation_manager_detects_uv_tool(monkeypatch, tmp_path):
     tool_dir = tmp_path / "tools"
-    environment = tool_dir / "osint-recon"
-    monkeypatch.setattr(updater.sys, "prefix", str(environment))
+    monkeypatch.setattr(updater.sys, "prefix", str(tool_dir / "osint-recon"))
     monkeypatch.setattr(updater.shutil, "which", lambda name: "uv" if name == "uv" else None)
     monkeypatch.setattr(updater, "_command_output", lambda command: str(tool_dir))
 
-    command = updater._update_command()
-
-    assert command == (
-        [
-            "uv",
-            "tool",
-            "upgrade",
-            "osint-recon",
-            "--reinstall-package",
-            "osint-recon",
-            "--quiet",
-            "--no-progress",
-        ],
-        "uv",
-    )
+    assert updater._installation_manager() == ("uv", "uv")
 
 
-def test_auto_update_continues_when_manager_fails(monkeypatch):
-    monkeypatch.delenv("RECON_AUTO_UPDATE", raising=False)
-    monkeypatch.setattr(updater, "_update_command", lambda: (["uv", "tool", "upgrade"], "uv"))
-    monkeypatch.setattr(updater, "_installation_fingerprint", lambda: ("0.11.0", "a" * 40))
+def test_installation_manager_detects_pipx(monkeypatch, tmp_path):
+    tool_dir = tmp_path / "pipx"
+    monkeypatch.setattr(updater.sys, "prefix", str(tool_dir / "osint-recon"))
+    monkeypatch.setattr(updater.shutil, "which", lambda name: "pipx" if name == "pipx" else None)
+    monkeypatch.setattr(updater, "_command_output", lambda command: str(tool_dir))
+
+    assert updater._installation_manager() == ("pipx", "pipx")
+
+
+def test_check_downloads_but_does_not_install(monkeypatch, update_environment):
+    downloaded: list[tuple[str, float]] = []
+    stale = update_environment / REVISION_A
+    stale.mkdir(parents=True)
+    (stale / "old.txt").write_text("old", encoding="utf-8")
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
+    monkeypatch.setattr(updater, "_remote_revision", lambda timeout: REVISION_B)
+
+    def download(revision, timeout):
+        downloaded.append((revision, timeout))
+        return _cached_project(update_environment, revision)
+
+    monkeypatch.setattr(updater, "_download_revision", download)
     monkeypatch.setattr(
         updater.subprocess,
         "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, "", "offline"),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("installed in background")),
     )
 
-    result = updater.auto_update()
+    result = updater.check_for_update(timeout=7)
 
-    assert result.attempted
-    assert not result.restart_required
-    assert "installed version" in result.message
+    assert downloaded == [(REVISION_B, 7)]
+    assert result.update_available and result.downloaded and not result.applied
+    assert json.loads((update_environment / "pending.json").read_text())["revision"] == REVISION_B
+    assert not stale.exists()
 
 
-def test_auto_update_requests_restart_for_new_revision(monkeypatch):
-    monkeypatch.delenv("RECON_AUTO_UPDATE", raising=False)
-    monkeypatch.setattr(updater, "_update_command", lambda: (["uv", "tool", "upgrade"], "uv"))
-    fingerprints = iter([("0.11.0", "a" * 40), ("0.11.0", "b" * 40)])
-    monkeypatch.setattr(updater, "_installation_fingerprint", lambda: next(fingerprints))
+def test_check_reuses_downloaded_revision(monkeypatch, update_environment):
+    _cached_project(update_environment, REVISION_B)
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
+    monkeypatch.setattr(updater, "_remote_revision", lambda timeout: REVISION_B)
+    monkeypatch.setattr(
+        updater, "_download_revision", lambda *_args: (_ for _ in ()).throw(AssertionError)
+    )
+
+    result = updater.check_for_update()
+
+    assert result.update_available and not result.downloaded
+    assert "is ready" in result.message
+
+
+def test_current_revision_clears_stale_pending(monkeypatch, update_environment):
+    _cached_project(update_environment, REVISION_B)
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
+    monkeypatch.setattr(updater, "_remote_revision", lambda timeout: REVISION_A)
+
+    result = updater.check_for_update()
+
+    assert result.attempted and not result.update_available
+    assert not (update_environment / "pending.json").exists()
+
+
+def test_check_failure_does_not_interrupt_specter(monkeypatch, update_environment):
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
+    monkeypatch.setattr(updater, "_remote_revision", lambda timeout: (_ for _ in ()).throw(OSError))
+
+    result = updater.check_for_update()
+
+    assert result.attempted and not result.update_available
+    assert "keep running" in result.message
+
+
+def test_archive_download_extracts_regular_files(monkeypatch, update_environment):
+    response = _tar_response({
+        "osint-recon-revision/pyproject.toml": b"[project]\nname='osint-recon'\n",
+        "osint-recon-revision/src/recon/__init__.py": b"__version__='1'\n",
+    })
+    monkeypatch.setattr(updater.urllib.request, "urlopen", lambda *_args, **_kwargs: response)
+
+    project = updater._download_revision(REVISION_A, 5)
+
+    assert (project / "pyproject.toml").is_file()
+    assert (project / "src" / "recon" / "__init__.py").is_file()
+
+
+def test_archive_download_rejects_path_traversal(monkeypatch, update_environment):
+    response = _tar_response({
+        "osint-recon-revision/../escape.txt": b"unsafe",
+        "osint-recon-revision/pyproject.toml": b"[project]",
+    })
+    monkeypatch.setattr(updater.urllib.request, "urlopen", lambda *_args, **_kwargs: response)
+
+    with pytest.raises(ValueError, match="unsafe path"):
+        updater._download_revision(REVISION_A, 5)
+
+    assert not (update_environment.parent / "escape.txt").exists()
+
+
+def test_archive_download_rejects_oversized_response(monkeypatch, update_environment):
+    response = _tar_response(
+        {"osint-recon-revision/pyproject.toml": b"[project]"},
+        size=str(updater._MAX_ARCHIVE_BYTES + 1),
+    )
+    monkeypatch.setattr(updater.urllib.request, "urlopen", lambda *_args, **_kwargs: response)
+
+    with pytest.raises(ValueError, match="too large"):
+        updater._download_revision(REVISION_A, 5)
+
+
+def test_apply_uses_exact_cached_revision(monkeypatch, update_environment):
+    project = _cached_project(update_environment, REVISION_B)
+    monkeypatch.setattr(
+        updater, "check_for_update", lambda **_kwargs: updater.UpdateResult(attempted=True)
+    )
+    commands: list[list[str]] = []
     monkeypatch.setattr(
         updater.subprocess,
         "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""),
-    )
-
-    result = updater.auto_update()
-
-    assert result.attempted
-    assert result.restart_required
-    assert "aaaaaaaa -> bbbbbbbb" in result.message
-
-
-def test_auto_update_does_not_restart_when_current(monkeypatch):
-    monkeypatch.delenv("RECON_AUTO_UPDATE", raising=False)
-    monkeypatch.setattr(updater, "_update_command", lambda: (["pipx", "upgrade"], "pipx"))
-    monkeypatch.setattr(updater, "_installation_fingerprint", lambda: ("0.11.0", None))
-    monkeypatch.setattr(
-        updater.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""),
-    )
-
-    result = updater.auto_update()
-
-    assert result.attempted
-    assert not result.restart_required
-    assert result.message == "application is up to date"
-
-
-def test_launcher_restarts_updated_code_before_spawning_children(monkeypatch):
-    from recon import launch
-
-    restarted: list[list[str]] = []
-    monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
-    monkeypatch.setattr(
-        launch,
-        "auto_update",
-        lambda *, enabled, force=False: updater.UpdateResult(True, True, "updated"),
-    )
-    monkeypatch.setattr(
-        launch,
-        "_spawn",
-        lambda args: (_ for _ in ()).throw(AssertionError("spawned before restart")),
-    )
-
-    def fake_restart(argv):
-        restarted.append(argv)
-        raise RuntimeError("restart requested")
-
-    monkeypatch.setattr(launch, "restart", fake_restart)
-
-    with pytest.raises(RuntimeError, match="restart requested"):
-        launch.main(["--no-browser", "--no-workers"])
-
-    assert restarted == [["--no-browser", "--no-workers"]]
-
-
-def test_manual_update_exits_without_starting_services(monkeypatch, capsys):
-    from recon import launch
-
-    calls: list[tuple[bool, bool]] = []
-    monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
-    monkeypatch.setattr(
-        launch,
-        "auto_update",
-        lambda *, enabled, force=False: (
-            calls.append((enabled, force))
-            or updater.UpdateResult(True, True, "updated with uv: old -> new")
+        lambda command, **_kwargs: (
+            commands.append(command) or subprocess.CompletedProcess(command, 0, "", "")
         ),
     )
+
+    result = updater.apply_pending_update()
+
+    assert result.applied
+    assert commands == [[
+        "uv", "tool", "install", "--force", "--reinstall-package", "osint-recon",
+        "--quiet", "--no-progress", str(project),
+    ]]
+    assert not (update_environment / "pending.json").exists()
+    assert json.loads((update_environment / "installed.json").read_text())["revision"] == REVISION_B
+    assert not project.exists()
+
+
+def test_apply_preserves_pending_update_on_failure(monkeypatch, update_environment):
+    _cached_project(update_environment, REVISION_B)
     monkeypatch.setattr(
-        launch,
-        "_prepare_database",
-        lambda: (_ for _ in ()).throw(AssertionError("database prepared during update")),
+        updater, "check_for_update", lambda **_kwargs: updater.UpdateResult(attempted=True)
     )
     monkeypatch.setattr(
-        launch,
-        "_spawn",
-        lambda args: (_ for _ in ()).throw(AssertionError("service started during update")),
+        updater.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, "", "failed"),
     )
 
-    launch.main(["--update"])
+    result = updater.apply_pending_update()
 
-    assert calls == [(True, True)]
-    assert "updated with uv: old -> new" in capsys.readouterr().out
+    assert not result.applied and result.update_available
+    assert (update_environment / "pending.json").exists()
 
 
-def test_launcher_prepares_database_and_server_before_workers(monkeypatch):
+def test_apply_can_use_cached_update_while_check_is_offline(monkeypatch, update_environment):
+    _cached_project(update_environment, REVISION_B)
+    monkeypatch.setattr(
+        updater,
+        "check_for_update",
+        lambda **_kwargs: updater.UpdateResult(attempted=True, message="offline"),
+    )
+    monkeypatch.setattr(
+        updater.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "", ""),
+    )
+
+    assert updater.apply_pending_update().applied
+
+
+def test_pipx_apply_command_uses_cached_project(tmp_path):
+    assert updater._apply_command(("pipx", "pipx"), tmp_path) == [
+        "pipx", "install", "--force", "--quiet", str(tmp_path)
+    ]
+
+
+def test_monitor_checks_repeatedly_and_stops(monkeypatch, update_environment):
+    calls: list[int] = []
+    notices: list[str] = []
+
+    def check():
+        calls.append(1)
+        return updater.UpdateResult(
+            attempted=True,
+            update_available=True,
+            downloaded=len(calls) == 1,
+            message="update ready",
+        )
+
+    monkeypatch.setattr(updater, "check_for_update", check)
+    monitor = updater.start_update_monitor(interval=0.01, notify=notices.append)
+    deadline = time.time() + 1
+    while len(calls) < 2 and time.time() < deadline:
+        time.sleep(0.005)
+    monitor.stop()
+    count_after_stop = len(calls)
+    time.sleep(0.03)
+
+    assert count_after_stop >= 2
+    assert len(calls) == count_after_stop
+    assert notices == ["update ready"]
+
+
+def test_launcher_routes_research_commands_to_specter_cli(monkeypatch):
+    from recon import cli, launch
+
+    received: list[list[str]] = []
+    monkeypatch.setattr(cli, "main", received.append)
+
+    launch.main(["scan", "torvalds"])
+
+    assert received == [["scan", "torvalds"]]
+
+
+def test_launcher_refuses_update_while_specter_is_running(monkeypatch, capsys):
+    from recon import launch
+
+    monkeypatch.setattr(launch, "_port_open", lambda host, port: True)
+    monkeypatch.setattr(
+        launch,
+        "apply_pending_update",
+        lambda: (_ for _ in ()).throw(AssertionError("updated a running installation")),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        launch.main(["--update"])
+
+    assert raised.value.code == 2
+    assert "stop the running Specter" in capsys.readouterr().out
+
+
+def test_manual_update_applies_and_exits(monkeypatch, capsys):
+    from recon import launch
+
+    monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
+    monkeypatch.setattr(
+        launch,
+        "apply_pending_update",
+        lambda: updater.UpdateResult(attempted=True, applied=True, message="applied"),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        launch.main(["--update"])
+
+    assert raised.value.code == 0
+    assert "applied" in capsys.readouterr().out
+
+
+def test_launcher_prepares_server_then_workers_and_monitor(monkeypatch):
     from recon import launch
 
     events: list[str] = []
@@ -200,26 +363,20 @@ def test_launcher_prepares_database_and_server_before_workers(monkeypatch):
         def poll(self):
             return 0
 
+    class Monitor:
+        def stop(self):
+            events.append("monitor:stop")
+
     monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
+    monkeypatch.setattr(launch, "_prepare_database", lambda: events.append("database"))
     monkeypatch.setattr(
-        launch,
-        "auto_update",
-        lambda *, enabled, force=False: updater.UpdateResult(),
+        launch, "_spawn", lambda args: (events.append(f"spawn:{args[0]}") or FinishedProcess())
     )
+    monkeypatch.setattr(launch, "_wait_healthy", lambda url: (events.append("healthy") or True))
     monkeypatch.setattr(
         launch,
-        "_prepare_database",
-        lambda: events.append("database"),
-    )
-    monkeypatch.setattr(
-        launch,
-        "_spawn",
-        lambda args: (events.append(f"spawn:{args[0]}") or FinishedProcess()),
-    )
-    monkeypatch.setattr(
-        launch,
-        "_wait_healthy",
-        lambda url: (events.append("healthy") or True),
+        "start_update_monitor",
+        lambda **_kwargs: (events.append("monitor:start") or Monitor()),
     )
     monkeypatch.setattr(launch.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(launch.time, "sleep", lambda _seconds: None)
@@ -227,11 +384,8 @@ def test_launcher_prepares_database_and_server_before_workers(monkeypatch):
     launch.main(["--no-browser"])
 
     assert events == [
-        "database",
-        "spawn:serve",
-        "healthy",
-        "spawn:worker",
-        "spawn:monitor",
+        "database", "spawn:serve", "healthy", "spawn:worker", "spawn:monitor",
+        "monitor:start", "monitor:stop",
     ]
 
 
@@ -239,11 +393,6 @@ def test_launcher_does_not_spawn_when_database_preparation_fails(monkeypatch, ca
     from recon import launch
 
     monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
-    monkeypatch.setattr(
-        launch,
-        "auto_update",
-        lambda *, enabled, force=False: updater.UpdateResult(),
-    )
     monkeypatch.setattr(
         launch,
         "_prepare_database",
@@ -260,29 +409,3 @@ def test_launcher_does_not_spawn_when_database_preparation_fails(monkeypatch, ca
 
     assert raised.value.code == 1
     assert "database startup failed: migration unavailable" in capsys.readouterr().err
-
-
-def test_restart_sets_guard_and_preserves_arguments(monkeypatch):
-    executed: dict[str, object] = {}
-
-    def fake_execve(executable, arguments, environment):
-        executed.update(
-            executable=executable,
-            arguments=arguments,
-            environment=environment,
-        )
-        raise RuntimeError("process replaced")
-
-    monkeypatch.setattr(updater.os, "execve", fake_execve)
-
-    with pytest.raises(RuntimeError, match="process replaced"):
-        updater.restart(["--no-browser"])
-
-    assert executed["executable"] == updater.sys.executable
-    assert executed["arguments"] == [
-        updater.sys.executable,
-        "-m",
-        "recon.launch",
-        "--no-browser",
-    ]
-    assert executed["environment"]["RECON_UPDATE_RESTARTED"] == "1"

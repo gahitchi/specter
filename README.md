@@ -1,6 +1,6 @@
-# osint-recon
+# Specter
 
-`osint-recon` is a local-first OSINT research framework for authorized
+Specter is a local-first OSINT research framework for authorized
 investigations. It collects public evidence, rejects common soft-404 false
 positives, follows bounded pivots, correlates confirmed observations, and stores
 runs for reporting and change detection.
@@ -82,31 +82,36 @@ curl -LsSf https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/ins
 ```
 
 The installer opens the dashboard. Later, run `specter` to start the dashboard,
-worker, and monitor together. Each fresh `specter` startup checks for an update
-through the isolated package manager before starting; offline failures do not
-prevent startup. Pass `--no-update` or set `RECON_AUTO_UPDATE=0` to skip that
-check.
+worker, and monitor together. While Specter is running, it checks the GitHub
+branch immediately and then every five minutes. When the installed revision is
+behind, Specter downloads the exact newer revision to a local cache without
+changing the running application. Offline failures do not prevent startup.
+Pass `--no-update` or set `RECON_AUTO_UPDATE=0` to disable these checks.
 
-You do not need to uninstall after changes are pushed. Run the same command on
-Windows and Arch Linux to refresh the installed Git branch immediately:
+When Specter announces that an update is ready, stop it with `Ctrl-C`, then
+apply the downloaded revision explicitly:
 
 ```text
 specter --update
 ```
 
-The normal `specter` command performs this check automatically before startup.
-Rerunning the platform installer is also safe and repairs the isolated
-environment in place. To remove the application binaries and environment on
-either platform, run `uv tool uninstall osint-recon`. Uninstalling the tool does
-not delete investigation databases or configuration.
+The command checks once for a newer revision before applying, so it also works
+when no update has been cached yet. A previously downloaded update can still be
+applied if GitHub is temporarily unavailable. Specter refuses to replace its
+installation while another Specter instance is running. Rerunning the platform
+installer remains a safe way to repair the isolated environment in place.
+
+The Python distribution retains the compatibility name `osint-recon`. To remove
+its binaries and isolated environment, run `uv tool uninstall osint-recon`.
+Uninstalling does not delete investigation databases or configuration.
 
 Python 3.10 through 3.14 is supported. The published CLI can also be installed
 in an isolated environment with `pipx`:
 
 ```bash
 pipx install osint-recon
-recon scan torvalds
-recon serve
+specter scan torvalds
+specter serve
 ```
 
 For development, [`uv`](https://docs.astral.sh/uv/) is the recommended
@@ -117,17 +122,17 @@ git clone https://github.com/gahitchi/osint-recon.git
 cd osint-recon
 uv sync
 
-uv run recon scan torvalds
-uv run recon scan person@example.com
-uv run recon scan https://github.com/torvalds
-uv run recon scan --email person@example.com --domain example.com --explain
-uv run recon scan --domain example.com --max-depth 2 --max-requests 200
+uv run specter scan torvalds
+uv run specter scan person@example.com
+uv run specter scan https://github.com/torvalds
+uv run specter scan --email person@example.com --domain example.com --explain
+uv run specter scan --domain example.com --max-depth 2 --max-requests 200
 ```
 
 Open the local dashboard:
 
 ```bash
-uv run recon serve
+uv run specter serve
 # http://127.0.0.1:8000
 ```
 
@@ -137,16 +142,16 @@ Development checkouts do not update themselves. Use `--no-browser`,
 
 ### One starting value
 
-`recon scan VALUE` uses the same conservative classifier as the dashboard and
+`specter scan VALUE` uses the same conservative classifier as the dashboard and
 API. Email, international phone, domain, URL, and IP syntax are recognized
 deterministically. A multi-word value is treated as a name. A single bare token
 is treated as a username but remains explicitly marked as an ambiguous
 classification. Use `--type` to override that interpretation:
 
 ```bash
-uv run recon scan mercury --type name
-uv run recon scan +14155552671
-uv run recon scan 8.8.8.8
+uv run specter scan mercury --type name
+uv run specter scan +14155552671
+uv run specter scan 8.8.8.8
 ```
 
 Known profile URLs also seed their public domain and, for recognized profile
@@ -170,8 +175,8 @@ it does not prove that the fact does not exist.
 Saved observations can be reviewed in the dashboard or from the CLI:
 
 ```bash
-uv run recon review --observation 42 --decision accepted --note "verified independently"
-uv run recon review-labels --out reviewed-labels.json
+uv run specter review --observation 42 --decision accepted --note "verified independently"
+uv run specter review-labels --out reviewed-labels.json
 ```
 
 Review decisions never overwrite the automated verdict. Their immutable history
@@ -181,9 +186,9 @@ The CLI can export a scan directly. JSON and HTML/PDF include the synthesized
 profile; CSV remains a flat finding table:
 
 ```bash
-uv run recon scan --username torvalds --format json --out reports/torvalds.json
-uv run recon scan --username torvalds --format csv --out reports/torvalds.csv
-uv run recon scan --username torvalds --format pdf --out reports/torvalds.pdf
+uv run specter scan --username torvalds --format json --out reports/torvalds.json
+uv run specter scan --username torvalds --format csv --out reports/torvalds.csv
+uv run specter scan --username torvalds --format pdf --out reports/torvalds.pdf
 ```
 
 PDF output requires the optional dependency:
@@ -202,9 +207,9 @@ dataset must pass the HTTPS-only source-pack validator before use:
 
 ```bash
 uv run python scripts/fetch_wmn.py
-uv run recon source-pack --input data/wmn-data.json --out data/wmn-validated.json
+uv run specter source-pack --input data/wmn-data.json --out data/wmn-validated.json
 RECON_SITES_FILE=data/wmn-validated.json RECON_ENABLE_EXPANSION=1 \
-  uv run recon scan --username torvalds
+  uv run specter scan --username torvalds
 ```
 
 PowerShell equivalent:
@@ -212,7 +217,7 @@ PowerShell equivalent:
 ```powershell
 $env:RECON_SITES_FILE = "data/wmn-validated.json"
 $env:RECON_ENABLE_EXPANSION = "1"
-uv run recon scan --username torvalds
+uv run specter scan --username torvalds
 ```
 
 Modules include username verification, Gravatar and MX evidence, DNS/RDAP/CT
@@ -299,7 +304,7 @@ file vault:
 
 ```bash
 uv sync --extra secure
-RECON_KEY_BACKEND=keyring uv run recon serve
+RECON_KEY_BACKEND=keyring uv run specter serve
 ```
 
 ## Monitoring and workers
@@ -307,9 +312,9 @@ RECON_KEY_BACKEND=keyring uv run recon serve
 Add a target to the watchlist while scanning:
 
 ```bash
-uv run recon scan --username torvalds --watch "0 */6 * * *"
-uv run recon monitor
-uv run recon worker
+uv run specter scan --username torvalds --watch "0 */6 * * *"
+uv run specter monitor
+uv run specter worker
 ```
 
 Local jobs use atomic leases. A crashed worker's lease expires and can be
@@ -322,7 +327,7 @@ uv sync --extra distributed --extra postgres
 RECON_DB_DSN=postgresql+psycopg://user:pass@host/recon \
 RECON_REDIS_DSN=redis://redis-host:6379 \
 RECON_QUEUE_BACKEND=arq \
-uv run recon worker
+uv run specter worker
 ```
 
 All workers must share the same database and Redis instance. SQLite and Postgres
@@ -334,8 +339,8 @@ also inspect or apply revisions explicitly with `alembic current` and
 ## Calibration and confidence
 
 ```bash
-uv run recon calibrate
-uv run recon analytics
+uv run specter calibrate
+uv run specter analytics
 ```
 
 Calibration reports include reliability bins, Brier score, ECE/MCE, confusion
@@ -349,8 +354,8 @@ The expansion gate combines representative calibration, migration state, source
 contracts, and recent designated canaries:
 
 ```bash
-uv run recon source-check --config canaries.json --fail-on-skip
-uv run recon maturity
+uv run specter source-check --config canaries.json --fail-on-skip
+uv run specter maturity
 ```
 
 Canary configuration contains operator-designated test artifacts and is never
@@ -364,18 +369,18 @@ operator's sources and use case.
 
 ## Expansion capabilities
 
-All expansion capabilities fail closed until `recon maturity` reports `READY`.
+All expansion capabilities fail closed until `specter maturity` reports `READY`.
 Setting `RECON_ENABLE_EXPANSION=1` does not bypass that check.
 
 Create independently verified identity-pair labels and train the optional model:
 
 ```bash
-uv run recon pair-review --left 41 --right 87 --decision same \
+uv run specter pair-review --left 41 --right 87 --decision same \
   --method "verified through independent account records" --reviewer analyst
 uv sync --extra ml
-uv run recon ml-train --out data/identity-model.json
+uv run specter ml-train --out data/identity-model.json
 RECON_ENABLE_EXPANSION=1 RECON_ML_MODEL=data/identity-model.json \
-  uv run recon scan --username example
+  uv run specter scan --username example
 ```
 
 Training requires at least 100 latest pair labels with at least 20 examples in
@@ -388,8 +393,8 @@ Bootstrap an administrator before enabling authenticated or remote service:
 
 ```bash
 RECON_USER_PASSWORD="a long unique administrator password" \
-  uv run recon user-add administrator --role admin
-uv run recon user-list
+  uv run specter user-add administrator --role admin
+uv run specter user-list
 ```
 
 Remote service requires a passed maturity gate, a non-loopback bind address, an
@@ -397,7 +402,7 @@ active administrator, a certificate and private key, and explicit trusted host
 names:
 
 ```bash
-uv run recon serve --remote --host 0.0.0.0 --port 8443 \
+uv run specter serve --remote --host 0.0.0.0 --port 8443 \
   --allowed-hosts recon.example.org \
   --tls-cert /etc/recon/fullchain.pem --tls-key /etc/recon/privkey.pem
 ```
@@ -413,8 +418,8 @@ Target exports are redacted by default. Raw labels, URLs, reasons, traces,
 signals, payloads, and review notes are omitted unless explicitly requested:
 
 ```bash
-uv run recon export-target --target 7
-uv run recon export-target --target 7 --include-sensitive --out reports/target-7.json
+uv run specter export-target --target 7
+uv run specter export-target --target 7 --include-sensitive --out reports/target-7.json
 ```
 
 Encrypted exports require the secure extra and a passphrase supplied through the
@@ -422,18 +427,18 @@ environment rather than a command-line argument:
 
 ```bash
 RECON_EXPORT_PASSPHRASE="a long private passphrase" \
-  uv run recon export-target --target 7 --include-sensitive --encrypt
+  uv run specter export-target --target 7 --include-sensitive --encrypt
 RECON_EXPORT_PASSPHRASE="a long private passphrase" \
-  uv run recon decrypt-export --input reports/target-7.orx --out target-7.json
+  uv run specter decrypt-export --input reports/target-7.orx --out target-7.json
 ```
 
 Retention is always explicit. Preview before applying, or purge one subject and
 its dependent investigation graph:
 
 ```bash
-uv run recon retention --days 90
-uv run recon retention --days 90 --apply
-uv run recon purge-target --target 7 --confirm
+uv run specter retention --days 90
+uv run specter retention --days 90 --apply
+uv run specter purge-target --target 7 --confirm
 ```
 
 Deletion keeps only a count-based audit event; it does not retain the subject's

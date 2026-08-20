@@ -1,6 +1,6 @@
 """Optional API-key vault.
 
-osint-recon is keyless-first: every default module runs with no credentials. The
+Specter is keyless-first: every default module runs with no credentials. The
 engine is built so *keyed* modules (Shodan, VirusTotal, AbuseIPDB, ...) plug in
 without re-architecting — a module declares `requires_keys`, and the engine skips
 it when the named keys are absent.
@@ -27,7 +27,7 @@ try:
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 
-# Catalogue of keys osint-recon knows how to use. `optional` keys merely enhance a
+# Catalogue of keys Specter knows how to use. `optional` keys merely enhance a
 # keyless module (higher rate limit / richer data); non-optional keys gate a module
 # that does nothing without them.
 KNOWN_KEYS: list[dict] = [

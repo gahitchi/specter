@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Download the official WhatsMyName dataset (600+ sites) for broad username
-coverage. The curated dataset bundled with `recon` stays the zero-setup default;
+coverage. The curated dataset bundled with Specter stays the zero-setup default;
 this is opt-in.
 
 Usage:
     python scripts/fetch_wmn.py            # -> data/wmn-data.json
-    RECON_SITES_FILE=data/wmn-data.json recon scan --username torvalds
+    RECON_SITES_FILE=data/wmn-data.json specter scan --username torvalds
 
 The loader (`recon.collectors.username.load_sites`) understands the raw wmn
 schema natively (via `_from_wmn`), so no conversion step is needed.
@@ -47,7 +47,7 @@ def main() -> int:
           f"({result['rejected']} rejected)")
     print(f"enable after maturity passes: RECON_ENABLE_EXPANSION=1 "
           f"RECON_SITES_FILE={DEST.relative_to(DEST.parents[1])} "
-          "recon scan --username <handle>")
+          "specter scan --username <handle>")
     return 0
 
 

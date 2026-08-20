@@ -114,7 +114,7 @@ class Database:
         if current != head:
             raise RuntimeError(
                 f"database schema is not current (current={current or 'none'}, head={head}); "
-                "run `recon db-upgrade` before starting the service"
+                "run `specter db-upgrade` before starting the service"
             )
 
     def ping(self) -> None:

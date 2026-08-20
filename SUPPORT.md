@@ -1,6 +1,6 @@
 # Support policy
 
-`osint-recon` is pre-1.0. Only the latest minor release receives fixes. Security
+Specter is pre-1.0. Only the latest minor release receives fixes. Security
 issues should be reported as described in `SECURITY.md`; ordinary defects should
 use GitHub Issues with secrets and subject data removed.
 
