@@ -117,6 +117,19 @@ def test_dashboard_exposes_scan_feedback_and_filters() -> None:
     assert dashboard.curtains == 3
 
 
+def test_dashboard_starts_with_typed_clues_for_one_subject() -> None:
+    markup = files("recon").joinpath("web/index.html").read_text(encoding="utf-8")
+    script = files("recon").joinpath("web/app.js").read_text(encoding="utf-8")
+
+    assert 'name="subject"' not in markup
+    assert "Known identity clues" in markup
+    assert "One subject" in markup
+    for name in {"name", "username", "email", "phone", "url", "domain", "ip_address"}:
+        assert f'name="{name}"' in markup
+    assert "function updateClueSummary()" in script
+    assert 'reuse.textContent = "Add to identity clues"' in script
+
+
 def test_dashboard_progressively_reveals_investigation_workspaces() -> None:
     markup = files("recon").joinpath("web/index.html").read_text(encoding="utf-8")
     script = files("recon").joinpath("web/app.js").read_text(encoding="utf-8")
@@ -144,9 +157,13 @@ def test_dashboard_assets_are_local_and_revisioned() -> None:
 
 def test_dashboard_uses_specter_branding() -> None:
     markup = files("recon").joinpath("web/index.html").read_text(encoding="utf-8")
+    icon = files("recon").joinpath("assets/specter.png")
+    icon_hash = sha256(icon.read_bytes()).hexdigest()[:12]
 
     assert "Specter" in markup
-    assert ">SP<" in markup
+    assert markup.count(f'src="/icon.png?v={icon_hash}"') == 2
+    assert f'href="/icon.png?v={icon_hash}"' in markup
+    assert ">SP<" not in markup
     assert "osint-recon" not in markup
 
 

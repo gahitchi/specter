@@ -51,6 +51,8 @@ They were not published releases; their changes are included in 0.11.0.
   replacement of a manual selection.
 - Start menu and Linux application-menu integration, application artwork, and
   one-command uninstallers that preserve local investigations and settings.
+- A distinct Specter ghost icon for the desktop window, tray, Start menu,
+  Linux application menu, and local web workspace.
 
 ### Changed
 
@@ -64,6 +66,10 @@ They were not published releases; their changes are included in 0.11.0.
   phase progression, plain-language activity explanations, an interactive
   discovery journal, milestones, branch following, connection explanations,
   smoothly animated graph changes, and reduced-motion support.
+- New investigations now begin with clear typed identity clues instead of one
+  ambiguous dashboard prompt. Supplied clues are summarized and researched as
+  one subject, and compatible graph discoveries can be added without silently
+  replacing an existing clue.
 - The one-command installers now open the native Specter application instead of
   a browser tab. Headless services and research commands remain available from
   the terminal.

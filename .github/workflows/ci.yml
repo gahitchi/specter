@@ -88,7 +88,7 @@ jobs:
           names=set(archive.namelist());
           entry_name=next(name for name in names if name.endswith('.dist-info/entry_points.txt'));
           entry_points=archive.read(entry_name).decode();
-          required={'recon/desktop.py','recon/desktop_settings.py','recon/assets/specter.svg','recon/updater.py','recon/web/index.html','recon/web/app.js','recon/web/style.css','recon/data/sites.json','recon/data/calibration_labels.json','recon/migrations/versions/20260813_0001_maturity_schema.py','recon/migrations/versions/20260814_0004_job_activity.py'};
+          required={'recon/desktop.py','recon/desktop_settings.py','recon/assets/specter.ico','recon/assets/specter.png','recon/updater.py','recon/web/index.html','recon/web/app.js','recon/web/style.css','recon/data/sites.json','recon/data/calibration_labels.json','recon/migrations/versions/20260813_0001_maturity_schema.py','recon/migrations/versions/20260814_0004_job_activity.py'};
           assert required <= names, required-names;
           assert 'specter-app = recon.launch:main' in entry_points"
       - name: Validate operator scripts

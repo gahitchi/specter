@@ -182,7 +182,15 @@ uv run specter serve
 services together. Development checkouts do not update themselves. Use
 `--headless`, `--no-workers`, or `--no-update` when appropriate.
 
-### One starting value
+### Identity clues
+
+The dashboard accepts typed name, username, email, phone, profile URL, domain,
+and IP address clues. Every filled field belongs to one investigation subject:
+Specter sends them through one query, uses them together when choosing research
+branches, and tests the resulting links without treating operator input as
+independent confirmation.
+
+The terminal also supports a single starting value for quick investigations.
 
 `specter scan VALUE` uses the same conservative classifier as the dashboard and
 API. Email, international phone, domain, URL, and IP syntax are recognized
@@ -198,9 +206,9 @@ uv run specter scan 8.8.8.8
 
 Known profile URLs also seed their public domain and, for recognized profile
 hosts, their handle. Local-network and credential-bearing URLs are rejected.
-Typed options remain available for investigations that begin with several known
-identifiers. A conflicting automatic and explicit value is rejected rather than
-silently choosing one.
+Typed options remain available in the terminal and API for investigations that
+begin with several known identifiers. A conflicting automatic and explicit
+value is rejected rather than silently choosing one.
 
 The New investigation workspace renders collection as it happens. Request
 details include the public host, sanitized URL, method, HTTP status, and duration;

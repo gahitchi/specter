@@ -19,7 +19,8 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 only
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_WHEEL_FILES = {
-    "recon/assets/specter.svg",
+    "recon/assets/specter.ico",
+    "recon/assets/specter.png",
     "recon/data/calibration_labels.json",
     "recon/data/sites.json",
     "recon/desktop.py",

@@ -40,6 +40,10 @@ if ($LASTEXITCODE -ne 0) {
 $BinDirectory = (& $Uv tool dir --bin).Trim()
 $Specter = Join-Path $BinDirectory "specter.exe"
 $SpecterApp = Join-Path $BinDirectory "specter-app.exe"
+$IconPath = (& $Specter --icon-path).Trim()
+if (-not (Test-Path -LiteralPath $IconPath)) {
+    throw "Specter was installed but its application icon is missing."
+}
 $Programs = [Environment]::GetFolderPath("Programs")
 $ShortcutPath = Join-Path $Programs "Specter.lnk"
 $Shell = New-Object -ComObject WScript.Shell
@@ -47,7 +51,7 @@ $Shortcut = $Shell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = $SpecterApp
 $Shortcut.WorkingDirectory = $HOME
 $Shortcut.Description = "Specter research and evidence workspace"
-$Shortcut.IconLocation = "$SpecterApp,0"
+$Shortcut.IconLocation = "$IconPath,0"
 $Shortcut.Save()
 
 Write-Host "Specter installed successfully. While running, it checks for updates every 5 minutes."

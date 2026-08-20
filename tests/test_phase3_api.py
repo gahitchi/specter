@@ -78,6 +78,14 @@ def test_local_api_validates_host_and_sets_security_headers():
     assert response.headers["cache-control"] == "no-store"
 
 
+def test_application_icon_is_served_from_the_package():
+    response = client.get("/icon.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
+
+
 def test_scan_rejects_empty_or_oversized_payload():
     assert client.post("/api/scan", json={}).status_code == 422
     assert client.post("/api/scan", json={"username": "x" * 321}).status_code == 422
@@ -106,6 +114,39 @@ def test_scan_accepts_one_auto_classified_subject(monkeypatch):
     assert seen["query"].username == "alice"
     assert seen["intake"]["kind"] == "username"
     assert response.json()["profile"]["title"] == "alice"
+
+
+def test_scan_treats_typed_clues_as_one_query(monkeypatch):
+    seen = {}
+
+    async def fake_scan(query, **kwargs):
+        seen["query"] = query
+        seen["intake"] = kwargs["intake"]
+        return {
+            "run_id": 13,
+            "target_id": 5,
+            "summary": {"identities": 0, "clusters": [], "profile": {}},
+            "reasoning": {},
+            "changes": [],
+            "findings": [],
+        }
+
+    monkeypatch.setattr(server, "scan", fake_scan)
+    response = client.post(
+        "/api/scan",
+        json={
+            "name": "Alice Example",
+            "username": "@Alice",
+            "email": "Alice@Example.com",
+        },
+    )
+
+    assert response.status_code == 200
+    assert seen["query"] == Query(
+        name="Alice Example", username="alice", email="alice@example.com"
+    )
+    assert seen["intake"]["kind"] == "multiple"
+    assert set(seen["intake"]["query_fields"]) == {"name", "username", "email"}
 
 
 def test_module_catalogue_marks_keyed_vs_keyless():

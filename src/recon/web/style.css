@@ -173,17 +173,17 @@ code {
 }
 
 .brand-mark {
-  display: grid;
   width: 36px;
   height: 36px;
   flex: 0 0 36px;
-  place-items: center;
-  border: 1px solid #4a6855;
   border-radius: 6px;
-  color: var(--primary);
-  background: #19221c;
-  font-size: 12px;
-  font-weight: 800;
+  overflow: hidden;
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .brand-block div,
@@ -503,20 +503,18 @@ code {
   font-weight: 750;
 }
 
-.subject-row {
+.clue-header {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr);
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr);
+  align-items: center;
   gap: 16px;
   margin-top: 14px;
 }
 
-.subject-field input {
-  min-height: 52px;
-  border-color: var(--line-strong);
-  padding: 12px 14px;
-  background: #141617;
-  font-size: 15px;
+.clue-title h3 {
+  margin: 3px 0 0;
+  font-size: 18px;
+  letter-spacing: 0;
 }
 
 .intake-preview {
@@ -539,36 +537,36 @@ code {
   border-color: var(--error);
 }
 
-.advanced-identifiers {
-  border-top: 1px solid var(--line);
-  margin-top: 18px;
-  padding-top: 11px;
-}
-
-.advanced-identifiers > summary {
-  width: fit-content;
-  cursor: pointer;
-  color: var(--blue);
-  font-size: 11px;
-  font-weight: 700;
+.intake-preview[data-kind="multiple"] {
+  border-color: var(--found);
 }
 
 .identifier-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
-  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 18px;
 }
 
-.identifier-grid label:nth-child(1),
-.identifier-grid label:nth-child(2),
-.identifier-grid label:nth-child(3) {
-  grid-column: span 2;
-}
-
-.identifier-grid label:nth-child(4),
-.identifier-grid label:nth-child(5) {
+.identifier-field-half {
   grid-column: span 3;
+}
+
+.identifier-field-wide {
+  grid-column: span 6;
+}
+
+.identifier-field input {
+  min-height: 46px;
+  border-color: var(--line-strong);
+  padding: 10px 12px;
+  background: #141617;
+}
+
+.identifier-field:focus-within span {
+  color: var(--text);
 }
 
 .scan-actions {
@@ -2340,11 +2338,11 @@ footer {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .identifier-grid label:nth-child(n) {
+  .identifier-field-half {
     grid-column: auto;
   }
 
-  .identifier-grid label:last-child {
+  .identifier-field-wide {
     grid-column: span 2;
   }
 
@@ -2485,7 +2483,7 @@ footer {
     padding: 16px;
   }
 
-  .subject-row,
+  .clue-header,
   .profile-head,
   .profile-columns {
     grid-template-columns: 1fr;
@@ -2514,7 +2512,7 @@ footer {
     grid-template-columns: 1fr;
   }
 
-  .identifier-grid label:last-child,
+  .identifier-field-wide,
   .tool-form .wide-field {
     grid-column: auto;
   }

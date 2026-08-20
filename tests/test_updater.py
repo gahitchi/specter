@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tarfile
@@ -406,6 +407,17 @@ def test_launcher_routes_research_commands_to_specter_cli(monkeypatch):
     launch.main(["scan", "torvalds"])
 
     assert received == [["scan", "torvalds"]]
+
+
+def test_launcher_exposes_the_platform_icon_path(capsys):
+    from recon import launch
+
+    launch.main(["--icon-path"])
+
+    icon_path = Path(capsys.readouterr().out.strip())
+    assert icon_path == launch._icon_path()
+    assert icon_path.is_file()
+    assert icon_path.suffix == (".ico" if os.name == "nt" else ".png")
 
 
 def test_launcher_refuses_update_while_specter_is_running(monkeypatch, capsys):

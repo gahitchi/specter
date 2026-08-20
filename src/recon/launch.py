@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -34,6 +35,72 @@ CLI_COMMANDS = frozenset({
     "serve", "source-check", "source-pack", "sources", "targets", "user-add",
     "user-list", "user-update", "worker",
 })
+
+
+def _icon_path() -> Path:
+    suffix = ".ico" if os.name == "nt" else ".png"
+    return Path(__file__).with_name("assets") / f"specter{suffix}"
+
+
+def _installed_tool_environment() -> bool:
+    return Path(sys.prefix).name.casefold().replace("_", "-") == "osint-recon"
+
+
+def _refresh_platform_icon() -> None:
+    icon = _icon_path()
+    if not icon.is_file():
+        return
+    try:
+        if os.name == "nt":
+            appdata = os.environ.get("APPDATA")
+            system_root = os.environ.get("SystemRoot")
+            if not appdata or not system_root:
+                return
+            powershell = (
+                Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            )
+            if not powershell.is_file():
+                return
+            shortcut = (
+                Path(appdata)
+                / "Microsoft"
+                / "Windows"
+                / "Start Menu"
+                / "Programs"
+                / "Specter.lnk"
+            )
+            if not shortcut.is_file():
+                return
+            script = (
+                "$s=(New-Object -ComObject WScript.Shell).CreateShortcut("
+                "$env:SPECTER_SHORTCUT_PATH);"
+                "$s.IconLocation=$env:SPECTER_ICON_PATH+',0';$s.Save()"
+            )
+            environment = os.environ.copy()
+            environment["SPECTER_SHORTCUT_PATH"] = str(shortcut)
+            environment["SPECTER_ICON_PATH"] = str(icon)
+            subprocess.run(
+                [
+                    str(powershell), "-NoProfile", "-NonInteractive",
+                    "-WindowStyle", "Hidden", "-Command", script,
+                ],
+                check=False,
+                capture_output=True,
+                timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                env=environment,
+            )
+            return
+
+        data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        desktop_entry = data_home / "applications" / "specter.desktop"
+        if not desktop_entry.is_file():
+            return
+        destination = data_home / "icons" / "hicolor" / "512x512" / "apps" / "specter.png"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(icon, destination)
+    except (OSError, subprocess.SubprocessError):
+        return
 
 
 def _output(message: str, *, error: bool = False) -> None:
@@ -192,8 +259,16 @@ def main(argv: list[str] | None = None) -> None:
     update_mode.add_argument(
         "--update", action="store_true", help="apply the downloaded update and exit"
     )
+    parser.add_argument("--icon-path", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--port", type=int, default=SETTINGS.port)
     args = parser.parse_args(launch_args)
+
+    if args.icon_path:
+        _output(str(_icon_path()))
+        return
+
+    if not args.headless and not args.update and _installed_tool_environment():
+        _refresh_platform_icon()
 
     host, port = SETTINGS.host, args.port
     url = f"http://{host}:{port}"

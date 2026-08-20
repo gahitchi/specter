@@ -184,11 +184,50 @@ function formParams() {
   return { params, obj };
 }
 
+const identityFields = ["name", "username", "email", "phone", "url", "domain", "ip_address"];
+const identityLabels = {
+  name: "name", username: "username", email: "email", phone: "phone",
+  url: "profile", domain: "domain", ip_address: "IP address",
+};
+
+function currentIdentityClues() {
+  const data = new FormData($("#q"));
+  return identityFields
+    .map((name) => [name, String(data.get(name) || "").trim()])
+    .filter(([, value]) => value);
+}
+
+function updateClueSummary() {
+  const root = $("#intake-preview");
+  const clues = currentIdentityClues();
+  root.dataset.kind = clues.length > 1 ? "multiple" : clues.length ? "explicit" : "";
+  if (!clues.length) {
+    root.innerHTML = "<strong>No clues added</strong><span>Add any details you already know.</span>";
+    return;
+  }
+  const labels = clues.map(([name]) => identityLabels[name]);
+  root.innerHTML = `<strong>${clues.length} ${clues.length === 1 ? "clue" : "clues"} for one subject</strong>`
+    + `<span>${esc(labels.join(" · "))}</span>`;
+}
+
+document.querySelectorAll("#q [name]").forEach((input) => {
+  input.addEventListener("input", updateClueSummary);
+});
+updateClueSummary();
+
 function renderIntake(intake) {
   const root = $("#intake-preview");
   if (!intake) {
-    root.dataset.kind = "";
-    root.innerHTML = "<strong>Automatic classification</strong><span>The starting value will be interpreted before any source is contacted.</span>";
+    updateClueSummary();
+    return;
+  }
+  const fields = Object.entries(intake.query_fields || {})
+    .filter(([name, value]) => identityFields.includes(name) && value);
+  if (fields.length) {
+    const labels = fields.map(([name]) => identityLabels[name]);
+    root.dataset.kind = fields.length > 1 ? "multiple" : "explicit";
+    root.innerHTML = `<strong>${fields.length} ${fields.length === 1 ? "clue" : "clues"} linked for research</strong>`
+      + `<span>${esc(labels.join(" · "))}</span>`;
     return;
   }
   const kind = String(intake.kind || "input").replace("ip_address", "IP address");
@@ -262,7 +301,7 @@ $("#q").addEventListener("submit", (e) => {
   e.preventDefault();
   if (es) es.close();
   const { params } = formParams();
-  if ([...params].length === 0) { setScanStatus("Enter a starting point.", "error"); return; }
+  if ([...params].length === 0) { setScanStatus("Add at least one identity clue.", "error"); return; }
   resetResults();
   beginResearchRoom();
   setScanStage("activity");
@@ -363,8 +402,9 @@ async function waitForJob(jobId) {
 }
 
 $("#save").addEventListener("click", async () => {
+  if (!$("#q").reportValidity()) return;
   const { obj } = formParams();
-  if (Object.keys(obj).length === 0) { setScanStatus("Enter a starting point.", "error"); return; }
+  if (Object.keys(obj).length === 0) { setScanStatus("Add at least one identity clue.", "error"); return; }
   liveScanFinished = true;
   if (es) es.close();
   resetResults();
@@ -1424,16 +1464,31 @@ function renderLiveDetail(node) {
   });
   actions.append(follow, explain);
   if (["artifact", "finding"].includes(node.kind) && node.label) {
-    const reuse = document.createElement("button"); reuse.type = "button"; reuse.className = "quiet-action";
-    reuse.textContent = "Use as starting point";
-    reuse.addEventListener("click", () => {
-      const input = document.querySelector("#q [name='subject']");
-      input.value = node.label;
-      setScanStage("start");
-      input.focus();
-      setScanStatus("Lead prepared as a new starting point.", "neutral");
-    });
-    actions.appendChild(reuse);
+    const fieldByArtifact = {
+      name: "name", username: "username", email: "email", phone: "phone",
+      domain: "domain", subdomain: "domain", hostname: "domain",
+      mx_host: "domain", nameserver: "domain", ip_address: "ip_address",
+      account_profile: "url", url: "url", link: "url",
+    };
+    const fieldName = fieldByArtifact[node.artifact_type || node.category];
+    if (fieldName) {
+      const reuse = document.createElement("button"); reuse.type = "button"; reuse.className = "quiet-action";
+      reuse.textContent = "Add to identity clues";
+      reuse.addEventListener("click", () => {
+        const input = document.querySelector(`#q [name='${fieldName}']`);
+        setScanStage("start");
+        if (input.value.trim() && input.value.trim() !== node.label.trim()) {
+          input.focus();
+          setScanStatus(`A different ${identityLabels[fieldName]} is already included.`, "warning");
+          return;
+        }
+        input.value = node.label;
+        updateClueSummary();
+        input.focus();
+        setScanStatus(`${identityLabels[fieldName]} added to the identity clues.`, "neutral");
+      });
+      actions.appendChild(reuse);
+    }
   }
   detail.append(kicker, heading, list, actions, explanation);
 }

@@ -87,7 +87,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 recon = [
-    "assets/*.svg",
+    "assets/*.ico",
+    "assets/*.png",
     "data/*.json",
     "web/*.html",
     "web/*.css",

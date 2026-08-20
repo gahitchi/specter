@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>New investigation - Specter</title>
-  <link rel="stylesheet" href="/static/style.css?v=4b41267885b8" />
+  <link rel="icon" type="image/png" href="/icon.png?v=242efaa11414" />
+  <link rel="stylesheet" href="/static/style.css?v=1aba78c814a0" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to workspace</a>
@@ -13,7 +14,7 @@
   <div id="auth-gate" hidden>
     <div class="auth-shell">
       <div class="auth-brand">
-        <span class="brand-mark" aria-hidden="true">SP</span>
+        <span class="brand-mark" aria-hidden="true"><img src="/icon.png?v=242efaa11414" alt="" /></span>
         <div>
           <strong>Specter</strong>
           <span>Evidence workspace</span>
@@ -35,7 +36,7 @@
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand-block">
-        <span class="brand-mark" aria-hidden="true">SP</span>
+        <span class="brand-mark" aria-hidden="true"><img src="/icon.png?v=242efaa11414" alt="" /></span>
         <div>
           <strong>Specter</strong>
           <span>Evidence workspace</span>
@@ -104,23 +105,26 @@
 
           <form id="q" class="scan-tool scan-stage active" data-scan-stage="start" role="tabpanel" aria-labelledby="scan-view-start" autocomplete="off">
             <fieldset class="subject-entry">
-              <legend>Starting point</legend>
-              <div class="subject-row">
-                <label class="subject-field"><span>One known detail</span><input name="subject" placeholder="Username, email, phone, name, domain, URL or IP" autocapitalize="none" spellcheck="false" /></label>
-                <div id="intake-preview" class="intake-preview" aria-live="polite"><strong>Automatic classification</strong><span>The starting value will be interpreted before any source is contacted.</span></div>
-              </div>
-              <details class="advanced-identifiers">
-                <summary>Add known identifiers</summary>
-                <div class="identifier-grid">
-                  <label><span>Username</span><input name="username" placeholder="torvalds" autocapitalize="none" spellcheck="false" /></label>
-                  <label><span>Email</span><input name="email" type="email" placeholder="user@example.com" autocapitalize="none" spellcheck="false" /></label>
-                  <label><span>Domain</span><input name="domain" placeholder="example.com" autocapitalize="none" spellcheck="false" /></label>
-                  <label><span>Phone</span><input name="phone" type="tel" placeholder="+14155552671" /></label>
-                  <label><span>Name</span><input name="name" placeholder="Ada Lovelace" /></label>
-                  <label><span>Profile URL</span><input name="url" type="url" placeholder="https://github.com/torvalds" autocapitalize="none" spellcheck="false" /></label>
-                  <label><span>IP address</span><input name="ip_address" placeholder="8.8.8.8" autocapitalize="none" spellcheck="false" /></label>
+              <legend>Known identity clues</legend>
+              <div class="clue-header">
+                <div class="clue-title">
+                  <span class="eyebrow">One subject</span>
+                  <h3>Build the starting identity</h3>
                 </div>
-              </details>
+                <div id="intake-preview" class="intake-preview" aria-live="polite">
+                  <strong>No clues added</strong>
+                  <span>Add any details you already know.</span>
+                </div>
+              </div>
+              <div class="identifier-grid" aria-describedby="intake-preview">
+                <label class="identifier-field identifier-field-half"><span>Full name</span><input name="name" autocomplete="name" placeholder="Ada Lovelace" /></label>
+                <label class="identifier-field identifier-field-half"><span>Username</span><input name="username" autocomplete="username" placeholder="ada_lovelace" autocapitalize="none" spellcheck="false" /></label>
+                <label class="identifier-field identifier-field-half"><span>Email address</span><input name="email" type="email" autocomplete="email" placeholder="ada@example.com" autocapitalize="none" spellcheck="false" /></label>
+                <label class="identifier-field identifier-field-half"><span>Phone number</span><input name="phone" type="tel" autocomplete="tel" placeholder="+14155552671" /></label>
+                <label class="identifier-field identifier-field-wide"><span>Known profile</span><input name="url" type="url" placeholder="https://github.com/ada" autocapitalize="none" spellcheck="false" /></label>
+                <label class="identifier-field identifier-field-half"><span>Website or domain</span><input name="domain" placeholder="example.com" autocapitalize="none" spellcheck="false" /></label>
+                <label class="identifier-field identifier-field-half"><span>IP address</span><input name="ip_address" placeholder="8.8.8.8" autocapitalize="none" spellcheck="false" /></label>
+              </div>
             </fieldset>
             <div class="scan-actions">
               <div class="action-group">
@@ -154,7 +158,7 @@
             </div>
 
             <ol id="research-phases" class="research-phases" aria-label="Investigation phases">
-              <li data-research-phase="understand"><span>1</span><strong>Understand</strong><small>Interpret the input</small></li>
+              <li data-research-phase="understand"><span>1</span><strong>Understand</strong><small>Organize the clues</small></li>
               <li data-research-phase="discover"><span>2</span><strong>Discover</strong><small>Find initial leads</small></li>
               <li data-research-phase="connect"><span>3</span><strong>Connect</strong><small>Expand relationships</small></li>
               <li data-research-phase="verify"><span>4</span><strong>Verify</strong><small>Check the evidence</small></li>
@@ -416,6 +420,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=91b1c2b5f789"></script>
+  <script src="/static/app.js?v=e493a00fd2d2"></script>
 </body>
 </html>

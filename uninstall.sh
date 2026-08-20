@@ -12,5 +12,6 @@ fi
 uv tool uninstall osint-recon
 data_directory="${XDG_DATA_HOME:-$HOME/.local/share}"
 rm -f "$data_directory/applications/specter.desktop"
+rm -f "$data_directory/icons/hicolor/512x512/apps/specter.png"
 rm -f "$data_directory/icons/hicolor/scalable/apps/specter.svg"
 printf 'Specter was removed. Investigation data and settings were left in place.\n'

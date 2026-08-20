@@ -106,7 +106,7 @@ QHeaderView::section { background: #252a27; color: #bec5c0; border: 0; border-ri
 
 
 def _icon_path() -> Path:
-    return Path(__file__).with_name("assets") / "specter.svg"
+    return Path(__file__).with_name("assets") / "specter.png"
 
 
 def _instance_name(instance_key: str) -> str:
@@ -669,7 +669,7 @@ class SpecterWindow(QMainWindow):
         QTimer.singleShot(
             80,
             lambda: self.view.page().runJavaScript(
-                'document.querySelector("input[name=subject]")?.focus();'
+                'document.querySelector("#q input[name=name]")?.focus();'
             ),
         )
 

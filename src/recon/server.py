@@ -198,7 +198,9 @@ def _same_origin(request: Request, origin: str) -> bool:
     )
 
 
-WEB_DIR = Path(__file__).resolve().parent / "web"
+PACKAGE_DIR = Path(__file__).resolve().parent
+WEB_DIR = PACKAGE_DIR / "web"
+ICON_PATH = PACKAGE_DIR / "assets" / "specter.png"
 
 
 @asynccontextmanager
@@ -592,6 +594,15 @@ async def api_pair_review(request: Request, payload: PairReviewPayload) -> JSONR
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/icon.png", include_in_schema=False)
+async def application_icon() -> FileResponse:
+    return FileResponse(
+        ICON_PATH,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @app.get("/api/search")

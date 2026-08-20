@@ -25,11 +25,14 @@ uv tool install --force --refresh-package osint-recon "$PACKAGE_SPEC"
 bin_directory="$(uv tool dir --bin)"
 data_directory="${XDG_DATA_HOME:-$HOME/.local/share}"
 applications_directory="$data_directory/applications"
-icon_directory="$data_directory/icons/hicolor/scalable/apps"
+icon_directory="$data_directory/icons/hicolor/512x512/apps"
 mkdir -p "$applications_directory" "$icon_directory"
-curl -LsSf \
-  https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/src/recon/assets/specter.svg \
-  -o "$icon_directory/specter.svg"
+icon_source="$("$bin_directory/specter" --icon-path)"
+if [[ ! -f "$icon_source" ]]; then
+  printf 'Specter was installed but its application icon is missing.\n' >&2
+  exit 1
+fi
+install -m 0644 "$icon_source" "$icon_directory/specter.png"
 printf '%s\n' \
   '[Desktop Entry]' \
   'Type=Application' \

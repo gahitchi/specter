@@ -18,6 +18,6 @@ include uninstall.sh
 include uv.lock
 recursive-include deploy *.example Caddyfile
 recursive-include scripts *.py *.sh
-recursive-include src/recon/assets *.svg
+recursive-include src/recon/assets *.ico *.png
 global-exclude *.py[cod]
 global-exclude *.db *.db-shm *.db-wal
