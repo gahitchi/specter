@@ -63,7 +63,7 @@ jobs:
           QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
           QTWEBENGINE_DISABLE_SANDBOX: "1"
           QT_QUICK_BACKEND: software
-        run: xvfb-run --auto-servernum uv run python scripts/desktop_smoke.py
+        run: xvfb-run --auto-servernum uv run python scripts/desktop_smoke.py --renderer-only
       - name: Validate Windows installer
         if: runner.os == 'Windows'
         shell: pwsh

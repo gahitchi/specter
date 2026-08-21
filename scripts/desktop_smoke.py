@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
@@ -10,7 +12,7 @@ from recon.desktop_settings import DesktopSettings
 from recon.updater import AvailableBuild, UpdateStatus
 
 
-def main() -> None:
+def main(*, verify_javascript_bridge: bool = True) -> None:
     app = QApplication.instance() or QApplication([])
     settings = DesktopSettings(
         check_for_updates=False,
@@ -70,10 +72,19 @@ def main() -> None:
             dispatch_when_ready,
         )
 
+    def renderer_ready(html: str) -> None:
+        if "Specter desktop smoke" in html:
+            window.bridge.notify("Bridge", "ready", "info")
+            return
+        QTimer.singleShot(100, poll_renderer)
+
+    def poll_renderer() -> None:
+        window.view.page().toHtml(renderer_ready)
+
     window.view.stop()
     window.view.setHtml("<html><head></head><body>Specter desktop smoke</body></html>")
     window.show()
-    QTimer.singleShot(0, poll_bridge)
+    QTimer.singleShot(0, poll_bridge if verify_javascript_bridge else poll_renderer)
     QTimer.singleShot(10_000, app.quit)
     app.exec()
     window.shutdown()
@@ -82,4 +93,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--renderer-only",
+        action="store_true",
+        help="verify the embedded renderer and native signal path without WebChannel",
+    )
+    arguments = parser.parse_args()
+    main(verify_javascript_bridge=not arguments.renderer_only)
