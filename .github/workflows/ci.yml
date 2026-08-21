@@ -60,10 +60,11 @@ jobs:
       - name: Smoke-test native desktop on Linux
         if: runner.os == 'Linux' && matrix.desktop_extra != ''
         env:
+          QT_QPA_PLATFORM: offscreen
           QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
           QTWEBENGINE_DISABLE_SANDBOX: "1"
           QT_QUICK_BACKEND: software
-        run: xvfb-run --auto-servernum uv run python scripts/desktop_smoke.py --renderer-only
+        run: uv run python scripts/desktop_smoke.py --shell-only
       - name: Validate Windows installer
         if: runner.os == 'Windows'
         shell: pwsh

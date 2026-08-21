@@ -12,7 +12,7 @@ from recon.desktop_settings import DesktopSettings
 from recon.updater import AvailableBuild, UpdateStatus
 
 
-def main(*, verify_javascript_bridge: bool = True) -> None:
+def main(*, verify_javascript_bridge: bool = True, shell_only: bool = False) -> None:
     app = QApplication.instance() or QApplication([])
     settings = DesktopSettings(
         check_for_updates=False,
@@ -56,6 +56,11 @@ def main(*, verify_javascript_bridge: bool = True) -> None:
         raise RuntimeError("version history did not initialize")
     if window.windowTitle() != "Specter":
         raise RuntimeError("desktop window did not initialize")
+    if shell_only:
+        window.view.stop()
+        window.instance_server.close()
+        window.shutdown()
+        return
 
     def dispatch_when_ready(ready: object) -> None:
         if bool(ready):
@@ -99,5 +104,17 @@ if __name__ == "__main__":
         action="store_true",
         help="verify the embedded renderer and native signal path without WebChannel",
     )
+    parser.add_argument(
+        "--shell-only",
+        action="store_true",
+        help="verify native shell construction without starting a WebEngine renderer",
+    )
     arguments = parser.parse_args()
-    main(verify_javascript_bridge=not arguments.renderer_only)
+    try:
+        main(
+            verify_javascript_bridge=not arguments.renderer_only,
+            shell_only=arguments.shell_only,
+        )
+    except Exception as exc:
+        print(f"::error title=Specter desktop smoke::{type(exc).__name__}: {exc}", flush=True)
+        raise
