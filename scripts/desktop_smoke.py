@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
-
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
@@ -12,7 +10,7 @@ from recon.desktop_settings import DesktopSettings
 from recon.updater import AvailableBuild, UpdateStatus
 
 
-def main(*, verify_javascript_bridge: bool = True, shell_only: bool = False) -> None:
+def main() -> None:
     app = QApplication.instance() or QApplication([])
     settings = DesktopSettings(
         check_for_updates=False,
@@ -56,11 +54,6 @@ def main(*, verify_javascript_bridge: bool = True, shell_only: bool = False) -> 
         raise RuntimeError("version history did not initialize")
     if window.windowTitle() != "Specter":
         raise RuntimeError("desktop window did not initialize")
-    if shell_only:
-        window.view.stop()
-        window.instance_server.close()
-        window.shutdown()
-        return
 
     def dispatch_when_ready(ready: object) -> None:
         if bool(ready):
@@ -77,19 +70,10 @@ def main(*, verify_javascript_bridge: bool = True, shell_only: bool = False) -> 
             dispatch_when_ready,
         )
 
-    def renderer_ready(html: str) -> None:
-        if "Specter desktop smoke" in html:
-            window.bridge.notify("Bridge", "ready", "info")
-            return
-        QTimer.singleShot(100, poll_renderer)
-
-    def poll_renderer() -> None:
-        window.view.page().toHtml(renderer_ready)
-
     window.view.stop()
     window.view.setHtml("<html><head></head><body>Specter desktop smoke</body></html>")
     window.show()
-    QTimer.singleShot(0, poll_bridge if verify_javascript_bridge else poll_renderer)
+    QTimer.singleShot(0, poll_bridge)
     QTimer.singleShot(10_000, app.quit)
     app.exec()
     window.shutdown()
@@ -98,23 +82,8 @@ def main(*, verify_javascript_bridge: bool = True, shell_only: bool = False) -> 
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--renderer-only",
-        action="store_true",
-        help="verify the embedded renderer and native signal path without WebChannel",
-    )
-    parser.add_argument(
-        "--shell-only",
-        action="store_true",
-        help="verify native shell construction without starting a WebEngine renderer",
-    )
-    arguments = parser.parse_args()
     try:
-        main(
-            verify_javascript_bridge=not arguments.renderer_only,
-            shell_only=arguments.shell_only,
-        )
+        main()
     except Exception as exc:
         print(f"::error title=Specter desktop smoke::{type(exc).__name__}: {exc}", flush=True)
         raise
