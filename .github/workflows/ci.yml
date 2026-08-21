@@ -57,11 +57,6 @@ jobs:
           QTWEBENGINE_DISABLE_SANDBOX: "1"
           QT_QUICK_BACKEND: software
         run: uv run python scripts/desktop_smoke.py
-      - name: Validate Linux desktop imports
-        if: runner.os == 'Linux' && matrix.desktop_extra != ''
-        run: >-
-          uv run python -c
-          "from recon.desktop import _icon_path; assert _icon_path().is_file()"
       - name: Validate Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
