@@ -1477,6 +1477,8 @@ function renderLiveDetail(node) {
       reuse.addEventListener("click", () => {
         const input = document.querySelector(`#q [name='${fieldName}']`);
         setScanStage("start");
+        const additionalClues = input.closest(".additional-clues");
+        if (additionalClues) additionalClues.open = true;
         if (input.value.trim() && input.value.trim() !== node.label.trim()) {
           input.focus();
           setScanStatus(`A different ${identityLabels[fieldName]} is already included.`, "warning");

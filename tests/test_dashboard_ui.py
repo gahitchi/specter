@@ -126,8 +126,34 @@ def test_dashboard_starts_with_typed_clues_for_one_subject() -> None:
     assert "One subject" in markup
     for name in {"name", "username", "email", "phone", "url", "domain", "ip_address"}:
         assert f'name="{name}"' in markup
+    assert '<details class="additional-clues">' in markup
+    assert "Profile, website and network clues" in markup
+    assert ">Start research</button>" in markup
+    assert ">Save as investigation</button>" in markup
     assert "function updateClueSummary()" in script
     assert 'reuse.textContent = "Add to identity clues"' in script
+    assert 'input.closest(".additional-clues")' in script
+
+
+def test_dashboard_navigation_prioritizes_common_tasks() -> None:
+    markup = files("recon").joinpath("web/index.html").read_text(encoding="utf-8")
+
+    assert "<summary>Start</summary>" in markup
+    assert "<summary>Investigate</summary>" in markup
+    assert "<summary>Advanced</summary>" in markup
+    assert ">New investigation</button>" in markup
+    assert ">Saved investigations</button>" in markup
+
+
+def test_desktop_menus_use_task_oriented_names() -> None:
+    source = files("recon").joinpath("desktop.py").read_text(encoding="utf-8")
+
+    assert 'addMenu("&Investigate")' in source
+    assert 'addMenu("&Advanced")' in source
+    assert 'addMenu("&Application")' in source
+    assert '"Software Updates"' in source
+    assert 'addMenu("&Navigate")' not in source
+    assert '"Update Manager"' not in source
 
 
 def test_dashboard_progressively_reveals_investigation_workspaces() -> None:

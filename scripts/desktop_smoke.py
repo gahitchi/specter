@@ -25,7 +25,7 @@ def main() -> None:
     )
     settings_dialog = SettingsDialog(settings, window)
     update_dialog = UpdateDialog(
-        UpdateStatus(False, None, None),
+        UpdateStatus(True, "b" * 40, None),
         check_now=lambda: None,
         load_history=lambda: None,
         select_build=lambda _build: None,
@@ -44,14 +44,21 @@ def main() -> None:
     window.bridge.notification.connect(record_notification)
 
     menus = {action.text().replace("&", "") for action in window.menuBar().actions()}
-    if menus != {"File", "Navigate", "View", "Tools", "Help"}:
+    if menus != {"File", "Investigate", "Advanced", "View", "Application", "Help"}:
         raise RuntimeError(f"unexpected desktop menus: {sorted(menus)}")
     if settings_dialog.windowTitle() != "Specter Settings":
         raise RuntimeError("settings dialog did not initialize")
-    if update_dialog.windowTitle() != "Specter Updates" or update_dialog.apply_button.isEnabled():
+    if (
+        update_dialog.windowTitle() != "Specter Software Updates"
+        or update_dialog.apply_button.isEnabled()
+    ):
         raise RuntimeError("update manager did not initialize")
     if update_dialog.history.rowCount() != 1:
         raise RuntimeError("version history did not initialize")
+    if update_dialog.history.currentRow() != 0 or not update_dialog.download_button.isEnabled():
+        raise RuntimeError("latest downloadable build was not selected")
+    if update_dialog.download_button.text() != "Download Update":
+        raise RuntimeError("latest build action was not clear")
     if window.windowTitle() != "Specter":
         raise RuntimeError("desktop window did not initialize")
 

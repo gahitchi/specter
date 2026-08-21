@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import time
+import urllib.error
 
 import pytest
 
@@ -245,11 +246,16 @@ def test_current_revision_clears_stale_pending(monkeypatch, update_environment):
 
 def test_check_failure_does_not_interrupt_specter(monkeypatch, update_environment):
     monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
-    monkeypatch.setattr(updater, "_remote_revision", lambda timeout: (_ for _ in ()).throw(OSError))
+    monkeypatch.setattr(
+        updater,
+        "_remote_revision",
+        lambda timeout: (_ for _ in ()).throw(urllib.error.URLError("offline")),
+    )
 
     result = updater.check_for_update()
 
     assert result.attempted and not result.update_available
+    assert "could not reach GitHub" in result.message
     assert "keep running" in result.message
 
 
@@ -264,6 +270,43 @@ def test_archive_download_extracts_regular_files(monkeypatch, update_environment
 
     assert (project / "pyproject.toml").is_file()
     assert (project / "src" / "recon" / "__init__.py").is_file()
+
+
+def test_archive_download_falls_back_when_codeload_is_unavailable(
+    monkeypatch, update_environment
+):
+    response = _tar_response({
+        "osint-recon-revision/pyproject.toml": b"[project]\nname='osint-recon'\n",
+    })
+    urls: list[str] = []
+
+    def open_archive(request, **_kwargs):
+        urls.append(request.full_url)
+        if len(urls) == 1:
+            raise urllib.error.URLError("offline")
+        return response
+
+    monkeypatch.setattr(updater.urllib.request, "urlopen", open_archive)
+
+    project = updater._download_revision(REVISION_A, 5)
+
+    assert (project / "pyproject.toml").is_file()
+    assert urls == [template.format(revision=REVISION_A) for template in updater.GITHUB_ARCHIVE_URLS]
+
+
+def test_download_failure_explains_network_problem(monkeypatch, update_environment):
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
+    monkeypatch.setattr(
+        updater,
+        "_download_revision",
+        lambda *_args: (_ for _ in ()).throw(urllib.error.URLError("offline")),
+    )
+
+    result = updater.download_build(REVISION_B)
+
+    assert result.attempted and not result.downloaded
+    assert "could not reach GitHub" in result.message
+    assert "installed version was not changed" in result.message
 
 
 def test_archive_download_rejects_path_traversal(monkeypatch, update_environment):

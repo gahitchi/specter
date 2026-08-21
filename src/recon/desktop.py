@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -53,6 +54,7 @@ from .updater import (
     UpdateStatus,
     check_for_update,
     download_build,
+    explain_update_error,
     get_update_status,
     list_available_builds,
     start_update_monitor,
@@ -235,10 +237,11 @@ class UpdateDialog(QDialog):
         self._select_build = select_build
         self._apply_update = apply_update
         self._builds: list[AvailableBuild] = []
-        self.setWindowTitle("Specter Updates")
-        self.setMinimumSize(760, 540)
+        self._downloading = False
+        self.setWindowTitle("Specter Software Updates")
+        self.setMinimumSize(760, 560)
 
-        heading = QLabel("Version history")
+        heading = QLabel("Software updates")
         heading.setStyleSheet("font-size: 20px; font-weight: 600;")
         self.summary = QLabel()
         self.summary.setWordWrap(True)
@@ -251,19 +254,37 @@ class UpdateDialog(QDialog):
         details_layout.addRow("Installed build", self.installed)
         details_layout.addRow("Downloaded build", self.pending)
 
+        self.check_button = QPushButton("Check for Updates")
+        self.check_button.clicked.connect(self._request_check)
+        self.apply_button = QPushButton("Install and Restart")
+        self.apply_button.setDefault(True)
+        self.apply_button.clicked.connect(self._apply_update)
+
+        update_actions = QHBoxLayout()
+        update_actions.addWidget(self.check_button)
+        update_actions.addStretch()
+        update_actions.addWidget(self.apply_button)
+
+        updates_page = QWidget()
+        updates_layout = QVBoxLayout(updates_page)
+        updates_layout.addWidget(self.summary)
+        updates_layout.addWidget(details)
+        updates_layout.addStretch()
+        updates_layout.addLayout(update_actions)
+
         history_header = QHBoxLayout()
-        history_label = QLabel("Available builds")
+        history_label = QLabel("Choose a version")
         history_label.setStyleSheet("font-size: 14px; font-weight: 600;")
-        self.history_status = QLabel("Open this window to load recent builds from GitHub.")
+        self.history_status = QLabel("Loading versions from GitHub...")
         self.history_status.setWordWrap(True)
-        self.history_button = QPushButton("Refresh History")
+        self.history_button = QPushButton("Refresh Versions")
         self.history_button.clicked.connect(self._request_history)
         history_header.addWidget(history_label)
         history_header.addStretch()
         history_header.addWidget(self.history_button)
 
         self.history = QTableWidget(0, 4)
-        self.history.setHorizontalHeaderLabels(["Build", "Published", "Build ID", "Status"])
+        self.history.setHorizontalHeaderLabels(["Version", "Date", "Build", "State"])
         self.history.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.history.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.history.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -275,33 +296,38 @@ class UpdateDialog(QDialog):
                 column, QHeaderView.ResizeMode.ResizeToContents
             )
         self.history.itemSelectionChanged.connect(self._selection_changed)
+        self.history.itemDoubleClicked.connect(lambda _item: self._request_download())
 
-        self.check_button = QPushButton("Check Latest")
-        self.check_button.clicked.connect(self._request_check)
-        self.download_button = QPushButton("Download Selected")
+        self.download_button = QPushButton("Select a version")
         self.download_button.setEnabled(False)
         self.download_button.clicked.connect(self._request_download)
-        self.apply_button = QPushButton("Install and Restart")
-        self.apply_button.setDefault(True)
-        self.apply_button.clicked.connect(self._apply_update)
+
+        version_actions = QHBoxLayout()
+        version_actions.addStretch()
+        version_actions.addWidget(self.download_button)
+
+        versions_page = QWidget()
+        versions_layout = QVBoxLayout(versions_page)
+        versions_layout.addLayout(history_header)
+        versions_layout.addWidget(self.history_status)
+        versions_layout.addWidget(self.history, 1)
+        versions_layout.addLayout(version_actions)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(updates_page, "Updates")
+        self.tabs.addTab(versions_page, "Other Versions")
+
         close_button = QPushButton("Close")
         close_button.clicked.connect(self.accept)
 
-        actions = QHBoxLayout()
-        actions.addWidget(self.check_button)
-        actions.addWidget(self.download_button)
-        actions.addStretch()
-        actions.addWidget(close_button)
-        actions.addWidget(self.apply_button)
+        close_actions = QHBoxLayout()
+        close_actions.addStretch()
+        close_actions.addWidget(close_button)
 
         layout = QVBoxLayout(self)
         layout.addWidget(heading)
-        layout.addWidget(self.summary)
-        layout.addWidget(details)
-        layout.addLayout(history_header)
-        layout.addWidget(self.history_status)
-        layout.addWidget(self.history, 1)
-        layout.addLayout(actions)
+        layout.addWidget(self.tabs, 1)
+        layout.addLayout(close_actions)
         self.refresh(status)
 
     def _request_check(self) -> None:
@@ -318,11 +344,24 @@ class UpdateDialog(QDialog):
 
     def _selection_changed(self) -> None:
         selected = self._selected_build()
-        self.download_button.setEnabled(
-            self._status.supported
-            and selected is not None
-            and selected.revision != self._status.installed_revision
-        )
+        if self._downloading:
+            self.download_button.setText("Downloading...")
+            self.download_button.setEnabled(False)
+        elif selected is None:
+            self.download_button.setText("Select a version")
+            self.download_button.setEnabled(False)
+        elif selected.revision == self._status.installed_revision:
+            self.download_button.setText("Installed")
+            self.download_button.setEnabled(False)
+        elif selected.revision == self._status.pending_revision:
+            self.download_button.setText("Downloaded")
+            self.download_button.setEnabled(False)
+        else:
+            latest = bool(self._builds and selected.revision == self._builds[0].revision)
+            self.download_button.setText(
+                "Download Update" if latest else "Download This Version"
+            )
+            self.download_button.setEnabled(self._status.supported)
 
     def _request_download(self) -> None:
         selected = self._selected_build()
@@ -354,9 +393,12 @@ class UpdateDialog(QDialog):
             self.history_status.setText("Loading recent builds from GitHub...")
 
     def set_downloading(self, downloading: bool) -> None:
-        self.download_button.setDisabled(downloading)
+        self._downloading = downloading
+        self._selection_changed()
         if downloading:
-            self.summary.setText("Downloading the selected build without installing it...")
+            self.history_status.setText(
+                "Downloading this version. Specter will not install it until you confirm."
+            )
 
     def set_history(self, builds: list[AvailableBuild], error: str = "") -> None:
         self.history_button.setEnabled(True)
@@ -366,7 +408,7 @@ class UpdateDialog(QDialog):
             self.history_status.setText(error)
         elif builds:
             self.history_status.setText(
-                "Choose any build to download. Installation happens only when you confirm it."
+                "The latest version is selected. Older versions remain available when needed."
             )
         else:
             self.history_status.setText("No builds are available.")
@@ -392,10 +434,22 @@ class UpdateDialog(QDialog):
                 self.history.setItem(row, column, item)
             if build.revision == selected_revision:
                 self.history.selectRow(row)
+        if self._builds and self.history.currentRow() < 0:
+            preferred_revision = self._status.pending_revision or self._builds[0].revision
+            preferred_row = next(
+                (
+                    row
+                    for row, build in enumerate(self._builds)
+                    if build.revision == preferred_revision
+                ),
+                0,
+            )
+            self.history.selectRow(preferred_row)
         self._selection_changed()
 
     def refresh(self, status: UpdateStatus, message: str = "") -> None:
         self._status = status
+        self._downloading = False
         self.set_checking(False)
         self.installed.setText(status.installed_label)
         self.pending.setText(status.pending_label)
@@ -411,7 +465,10 @@ class UpdateDialog(QDialog):
         elif status.pending_revision:
             self.summary.setText("A newer build is downloaded and ready to install.")
         else:
-            self.summary.setText("No downloaded update is waiting.")
+            self.summary.setText("Specter is ready to check for software updates.")
+
+    def show_ready_to_install(self) -> None:
+        self.tabs.setCurrentIndex(0)
 
 
 class SpecterWindow(QMainWindow):
@@ -502,35 +559,42 @@ class SpecterWindow(QMainWindow):
             shortcut=QKeySequence.StandardKey.New,
             icon=self._standard_icon("document-new", QStyle.StandardPixmap.SP_FileIcon),
         )
+        self._action(
+            file_menu,
+            "Saved Investigations",
+            lambda: self.open_tab("investigations"),
+        )
         file_menu.addSeparator()
         self._action(file_menu, "Exit Specter", self.quit_application, shortcut="Ctrl+Q")
 
-        navigate = self.menuBar().addMenu("&Navigate")
-        workspace = navigate.addMenu("Workspace")
-        analysis = navigate.addMenu("Analysis")
-        operations = navigate.addMenu("Operations")
+        investigate_menu = self.menuBar().addMenu("&Investigate")
         for label, tab in (
-            ("New Investigation", "search"),
-            ("Investigations", "investigations"),
-            ("Evidence Review", "review"),
+            ("Review Evidence", "review"),
             ("Change Timeline", "timeline"),
-        ):
-            self._action(workspace, label, lambda checked=False, name=tab: self.open_tab(name))
-        for label, tab in (
             ("Identity Graph", "graph"),
             ("Discovery Map", "map"),
-            ("Insights", "insights"),
-            ("Reasoning", "reasoning"),
-            ("Confidence", "confidence"),
+            ("Investigation Reasoning", "reasoning"),
         ):
-            self._action(analysis, label, lambda checked=False, name=tab: self.open_tab(name))
+            self._action(
+                investigate_menu,
+                label,
+                lambda checked=False, name=tab: self.open_tab(name),
+            )
+
+        advanced_menu = self.menuBar().addMenu("&Advanced")
         for label, tab in (
+            ("Analysis Insights", "insights"),
+            ("Confidence Quality", "confidence"),
             ("Source Health", "sources"),
-            ("Modules and Keys", "keys"),
-            ("Data Governance", "governance"),
-            ("Administration", "administration"),
+            ("Provider Access", "keys"),
+            ("Data Controls", "governance"),
+            ("Team and System", "administration"),
         ):
-            self._action(operations, label, lambda checked=False, name=tab: self.open_tab(name))
+            self._action(
+                advanced_menu,
+                label,
+                lambda checked=False, name=tab: self.open_tab(name),
+            )
 
         view_menu = self.menuBar().addMenu("&View")
         self._action(
@@ -560,13 +624,17 @@ class SpecterWindow(QMainWindow):
         self._action(view_menu, "Actual Size", lambda: self._set_zoom(100), shortcut="Ctrl+0")
         self._action(view_menu, "Full Screen", self._toggle_fullscreen, shortcut="F11")
 
-        tools_menu = self.menuBar().addMenu("&Tools")
-        self._action(tools_menu, "Settings", self.show_settings, shortcut="Ctrl+,")
-        self._action(tools_menu, "Update Manager", self.show_updates)
-        tools_menu.addSeparator()
-        self._action(tools_menu, "Open Data Folder", lambda: self._open_folder(data_root()))
+        application_menu = self.menuBar().addMenu("&Application")
+        self._action(application_menu, "Settings", self.show_settings, shortcut="Ctrl+,")
+        self._action(application_menu, "Software Updates", self.show_updates)
+        application_menu.addSeparator()
         self._action(
-            tools_menu,
+            application_menu,
+            "Open Data Folder",
+            lambda: self._open_folder(data_root()),
+        )
+        self._action(
+            application_menu,
             "Open Log Folder",
             lambda: self._open_folder(state_root() / "logs"),
         )
@@ -770,8 +838,8 @@ class SpecterWindow(QMainWindow):
         def run() -> None:
             try:
                 result = (list_available_builds(), "")
-            except (OSError, ValueError, json.JSONDecodeError):
-                result = ([], "Version history is temporarily unavailable. Try again later.")
+            except (OSError, TimeoutError, ValueError, json.JSONDecodeError) as error:
+                result = ([], f"Could not load versions: {explain_update_error(error)}.")
             self.update_history_result.emit(result)
 
         threading.Thread(target=run, name="specter-version-history", daemon=True).start()
@@ -800,6 +868,8 @@ class SpecterWindow(QMainWindow):
         self.statusBar().showMessage(message, 8000)
         if self._update_dialog is not None:
             self._update_dialog.refresh(get_update_status(), message)
+            if result.downloaded:
+                self._update_dialog.show_ready_to_install()
         if result.downloaded:
             self._notify("Specter build ready", message, "info")
 

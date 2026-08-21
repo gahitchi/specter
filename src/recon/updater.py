@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
+import urllib.error
 import urllib.request
 
 PACKAGE_NAME = "osint-recon"  # Compatibility identifier used by existing installs.
@@ -26,6 +27,10 @@ GITHUB_COMMITS_URL = (
     "https://api.github.com/repos/gahitchi/osint-recon/commits?sha=gpt-branch&per_page={limit}"
 )
 GITHUB_ARCHIVE_URL = "https://github.com/gahitchi/osint-recon/archive/{revision}.tar.gz"
+GITHUB_ARCHIVE_URLS = (
+    "https://codeload.github.com/gahitchi/osint-recon/tar.gz/{revision}",
+    GITHUB_ARCHIVE_URL,
+)
 _MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 _MAX_EXTRACTED_BYTES = 250 * 1024 * 1024
 _UPDATE_LOCK = threading.Lock()
@@ -157,6 +162,29 @@ def _write_json(path: Path, payload: dict) -> None:
     os.replace(temporary, path)
 
 
+def explain_update_error(error: BaseException) -> str:
+    """Turn updater failures into a short message that a user can act on."""
+    if isinstance(error, urllib.error.HTTPError):
+        if error.code in {403, 429}:
+            return "GitHub temporarily limited update requests; try again in a few minutes"
+        if error.code == 404:
+            return "that build is no longer available on GitHub"
+        return f"GitHub returned HTTP {error.code}"
+    if isinstance(error, urllib.error.URLError):
+        return "Specter could not reach GitHub; check the internet connection and try again"
+    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        return "the request timed out; check the connection and try again"
+    if isinstance(error, PermissionError):
+        return "Specter could not write to its update folder"
+    if isinstance(error, tarfile.TarError):
+        return "GitHub returned an unreadable update archive"
+    if isinstance(error, json.JSONDecodeError):
+        return "GitHub returned an unreadable response"
+    if isinstance(error, ValueError):
+        return str(error).rstrip(".")
+    return "the update service is temporarily unavailable"
+
+
 def _valid_revision(value: object) -> str | None:
     if not isinstance(value, str) or len(value) != 40:
         return None
@@ -249,6 +277,43 @@ def _safe_member_path(member_name: str) -> tuple[str, ...] | None:
     return relative if relative and all(part not in {"", "."} for part in relative) else None
 
 
+def _download_archive(revision: str, archive_path: Path, timeout: float) -> None:
+    last_error: BaseException | None = None
+    for url_template in GITHUB_ARCHIVE_URLS:
+        archive_path.unlink(missing_ok=True)
+        request = urllib.request.Request(
+            url_template.format(revision=revision),
+            headers={
+                "Accept": "application/octet-stream",
+                "User-Agent": "Specter update downloader",
+            },
+        )
+        downloaded_bytes = 0
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
+                content_length = int(response.headers.get("Content-Length", "0") or 0)
+                if content_length > _MAX_ARCHIVE_BYTES:
+                    raise ValueError("the update archive is too large")
+                with archive_path.open("wb") as output:
+                    while chunk := response.read(1024 * 1024):
+                        downloaded_bytes += len(chunk)
+                        if downloaded_bytes > _MAX_ARCHIVE_BYTES:
+                            raise ValueError("the update archive is too large")
+                        output.write(chunk)
+            if downloaded_bytes == 0:
+                raise ValueError("GitHub returned an empty update archive")
+            return
+        except ValueError:
+            archive_path.unlink(missing_ok=True)
+            raise
+        except (OSError, TimeoutError) as error:
+            archive_path.unlink(missing_ok=True)
+            last_error = error
+    if last_error is None:
+        raise OSError("no update download service is configured")
+    raise last_error
+
+
 def _download_revision(revision: str, timeout: float) -> Path:
     root = _cache_root()
     destination = root / revision
@@ -257,46 +322,41 @@ def _download_revision(revision: str, timeout: float) -> Path:
 
     root.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f"{revision[:8]}-", dir=root))
-    request = urllib.request.Request(
-        GITHUB_ARCHIVE_URL.format(revision=revision),
-        headers={"User-Agent": "Specter update downloader"},
-    )
+    archive_path = temporary / ".specter-update.tar.gz"
     extracted_bytes = 0
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
-            content_length = int(response.headers.get("Content-Length", "0") or 0)
-            if content_length > _MAX_ARCHIVE_BYTES:
-                raise ValueError("update archive is too large")
-            with tarfile.open(fileobj=response, mode="r|gz") as archive:
-                for member in archive:
-                    relative = _safe_member_path(member.name)
-                    if relative is None:
-                        if len(PurePosixPath(member.name).parts) == 1 and member.isdir():
-                            continue
-                        raise ValueError("update archive contains an unsafe path")
-                    target = temporary.joinpath(*relative)
-                    if not _within(target, temporary):
-                        raise ValueError("update archive escapes its destination")
-                    if member.isdir():
-                        target.mkdir(parents=True, exist_ok=True)
+        _download_archive(revision, archive_path, timeout)
+        with tarfile.open(archive_path, mode="r:gz") as archive:
+            for member in archive:
+                relative = _safe_member_path(member.name)
+                if relative is None:
+                    if len(PurePosixPath(member.name).parts) == 1 and member.isdir():
                         continue
-                    if not member.isfile():
-                        raise ValueError("update archive contains unsupported entries")
-                    extracted_bytes += member.size
-                    if extracted_bytes > _MAX_EXTRACTED_BYTES:
-                        raise ValueError("expanded update is too large")
-                    source = archive.extractfile(member)
-                    if source is None:
-                        raise ValueError("update archive is incomplete")
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    with source, target.open("wb") as output:
-                        shutil.copyfileobj(source, output)
-                    try:
-                        target.chmod(member.mode & 0o777)
-                    except OSError:
-                        pass
+                    raise ValueError("update archive contains an unsafe path")
+                target = temporary.joinpath(*relative)
+                if not _within(target, temporary):
+                    raise ValueError("update archive escapes its destination")
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                if not member.isfile():
+                    raise ValueError("update archive contains unsupported entries")
+                extracted_bytes += member.size
+                if extracted_bytes > _MAX_EXTRACTED_BYTES:
+                    raise ValueError("the expanded update is too large")
+                source = archive.extractfile(member)
+                if source is None:
+                    raise ValueError("the update archive is incomplete")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with source, target.open("wb") as output:
+                    shutil.copyfileobj(source, output)
+                try:
+                    target.chmod(member.mode & 0o777)
+                except OSError:
+                    pass
+        archive_path.unlink(missing_ok=True)
         if not (temporary / "pyproject.toml").is_file():
-            raise ValueError("update archive does not contain Specter")
+            raise ValueError("the update archive does not contain Specter")
         try:
             os.replace(temporary, destination)
         except FileExistsError:
@@ -403,10 +463,10 @@ def check_for_update(
                 downloaded=True,
                 message=f"A {PRODUCT_NAME} update was downloaded and is ready to install",
             )
-        except (OSError, ValueError, json.JSONDecodeError, tarfile.TarError):
+        except (OSError, TimeoutError, ValueError, json.JSONDecodeError, tarfile.TarError) as error:
             return UpdateResult(
                 attempted=True,
-                message="update check unavailable; Specter will keep running",
+                message=f"Update check failed: {explain_update_error(error)}. Specter will keep running.",
             )
 
 
@@ -435,10 +495,13 @@ def download_build(
                 },
             )
             _prune_cached_revisions(keep={validated})
-        except (OSError, ValueError, json.JSONDecodeError, tarfile.TarError):
+        except (OSError, TimeoutError, ValueError, json.JSONDecodeError, tarfile.TarError) as error:
             return UpdateResult(
                 attempted=True,
-                message="The selected build could not be downloaded; the current version is unchanged",
+                message=(
+                    f"Download failed: {explain_update_error(error)}. "
+                    "The installed version was not changed."
+                ),
             )
     return UpdateResult(
         attempted=True,

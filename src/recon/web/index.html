@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark" />
   <title>New investigation - Specter</title>
   <link rel="icon" type="image/png" href="/icon.png?v=bfaef8a7a5e4" />
-  <link rel="stylesheet" href="/static/style.css?v=1aba78c814a0" />
+  <link rel="stylesheet" href="/static/style.css?v=7c22b30ed523" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to workspace</a>
@@ -51,31 +51,31 @@
 
       <nav id="tabs" aria-label="Workspace navigation">
         <details class="nav-curtain" open>
-          <summary>Workspace</summary>
+          <summary>Start</summary>
           <div class="nav-items">
-            <button type="button" data-tab="search" data-role="scan" data-title="New investigation" data-context="Workspace" class="active" aria-current="page">Search</button>
-            <button type="button" data-tab="investigations" data-title="Investigations" data-context="Workspace">Investigations</button>
-            <button type="button" data-tab="review" data-title="Evidence review" data-context="Workspace">Review</button>
-            <button type="button" data-tab="timeline" data-title="Change timeline" data-context="Workspace">Timeline</button>
+            <button type="button" data-tab="search" data-role="scan" data-title="New investigation" data-context="Start" class="active" aria-current="page">New investigation</button>
+            <button type="button" data-tab="investigations" data-title="Saved investigations" data-context="Start">Saved investigations</button>
           </div>
         </details>
         <details class="nav-curtain">
-          <summary>Analysis</summary>
+          <summary>Investigate</summary>
           <div class="nav-items">
-            <button type="button" data-tab="graph" data-title="Identity graph" data-context="Analysis">Identity graph</button>
-            <button type="button" data-tab="map" data-title="Discovery map" data-context="Analysis">Discovery map</button>
-            <button type="button" data-tab="insights" data-title="Insights" data-context="Analysis">Insights</button>
-            <button type="button" data-tab="reasoning" data-title="Investigation reasoning" data-context="Analysis">Reasoning</button>
-            <button type="button" data-tab="confidence" data-role="review" data-title="Confidence analytics" data-context="Analysis">Confidence</button>
+            <button type="button" data-tab="review" data-title="Review evidence" data-context="Investigate">Review evidence</button>
+            <button type="button" data-tab="timeline" data-title="Change timeline" data-context="Investigate">Change timeline</button>
+            <button type="button" data-tab="graph" data-title="Identity graph" data-context="Investigate">Identity graph</button>
+            <button type="button" data-tab="map" data-title="Discovery map" data-context="Investigate">Discovery map</button>
+            <button type="button" data-tab="reasoning" data-title="Investigation reasoning" data-context="Investigate">Investigation reasoning</button>
           </div>
         </details>
-        <details class="nav-curtain">
-          <summary>Operations</summary>
+        <details class="nav-curtain nav-curtain-advanced">
+          <summary>Advanced</summary>
           <div class="nav-items">
-            <button type="button" data-tab="sources" data-title="Source health" data-context="Operations">Source health</button>
-            <button type="button" data-tab="keys" data-role="admin" data-title="Modules and keys" data-context="Operations">Modules &amp; keys</button>
-            <button type="button" data-tab="governance" data-role="admin" data-title="Data governance" data-context="Operations">Governance</button>
-            <button type="button" data-tab="administration" data-role="admin" data-title="Administration" data-context="Operations">Administration</button>
+            <button type="button" data-tab="insights" data-title="Analysis insights" data-context="Advanced">Analysis insights</button>
+            <button type="button" data-tab="confidence" data-role="review" data-title="Confidence quality" data-context="Advanced">Confidence quality</button>
+            <button type="button" data-tab="sources" data-title="Source health" data-context="Advanced">Source health</button>
+            <button type="button" data-tab="keys" data-role="admin" data-title="Provider access" data-context="Advanced">Provider access</button>
+            <button type="button" data-tab="governance" data-role="admin" data-title="Data controls" data-context="Advanced">Data controls</button>
+            <button type="button" data-tab="administration" data-role="admin" data-title="Team and system" data-context="Advanced">Team &amp; system</button>
           </div>
         </details>
       </nav>
@@ -84,7 +84,7 @@
     <div class="app-main">
       <header class="topbar">
         <div class="page-heading">
-          <span class="eyebrow" id="page-context">Workspace</span>
+          <span class="eyebrow" id="page-context">Start</span>
           <h1 id="page-title">New investigation</h1>
         </div>
         <div id="account" hidden>
@@ -116,20 +116,25 @@
                   <span>Add any details you already know.</span>
                 </div>
               </div>
-              <div class="identifier-grid" aria-describedby="intake-preview">
+              <div class="identifier-grid primary-clues" aria-describedby="intake-preview">
                 <label class="identifier-field identifier-field-half"><span>Full name</span><input name="name" autocomplete="name" placeholder="Ada Lovelace" /></label>
                 <label class="identifier-field identifier-field-half"><span>Username</span><input name="username" autocomplete="username" placeholder="ada_lovelace" autocapitalize="none" spellcheck="false" /></label>
                 <label class="identifier-field identifier-field-half"><span>Email address</span><input name="email" type="email" autocomplete="email" placeholder="ada@example.com" autocapitalize="none" spellcheck="false" /></label>
                 <label class="identifier-field identifier-field-half"><span>Phone number</span><input name="phone" type="tel" autocomplete="tel" placeholder="+14155552671" /></label>
-                <label class="identifier-field identifier-field-wide"><span>Known profile</span><input name="url" type="url" placeholder="https://github.com/ada" autocapitalize="none" spellcheck="false" /></label>
-                <label class="identifier-field identifier-field-half"><span>Website or domain</span><input name="domain" placeholder="example.com" autocapitalize="none" spellcheck="false" /></label>
-                <label class="identifier-field identifier-field-half"><span>IP address</span><input name="ip_address" placeholder="8.8.8.8" autocapitalize="none" spellcheck="false" /></label>
               </div>
+              <details class="additional-clues">
+                <summary>Profile, website and network clues</summary>
+                <div class="identifier-grid additional-clue-grid">
+                  <label class="identifier-field identifier-field-wide"><span>Known profile</span><input name="url" type="url" placeholder="https://github.com/ada" autocapitalize="none" spellcheck="false" /></label>
+                  <label class="identifier-field identifier-field-half"><span>Website or domain</span><input name="domain" placeholder="example.com" autocapitalize="none" spellcheck="false" /></label>
+                  <label class="identifier-field identifier-field-half"><span>IP address</span><input name="ip_address" placeholder="8.8.8.8" autocapitalize="none" spellcheck="false" /></label>
+                </div>
+              </details>
             </fieldset>
             <div class="scan-actions">
               <div class="action-group">
-                <button type="submit" id="go" class="primary-action">Run live research</button>
-                <button type="button" id="save" class="secondary-action">Run and save</button>
+                <button type="submit" id="go" class="primary-action">Start research</button>
+                <button type="button" id="save" class="secondary-action">Save as investigation</button>
               </div>
               <span id="status" class="scan-status" role="status" aria-live="polite">Ready</span>
             </div>
@@ -420,6 +425,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=e493a00fd2d2"></script>
+  <script src="/static/app.js?v=6f56d5d34a18"></script>
 </body>
 </html>
