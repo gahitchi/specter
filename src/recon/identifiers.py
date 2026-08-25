@@ -86,11 +86,11 @@ def _email(value: str) -> str | None:
     return f"{local.casefold()}@{normalized_domain}"
 
 
-def _phone(value: str) -> str | None:
-    if not value.startswith("+"):
+def _phone(value: str, default_region: str | None = None) -> str | None:
+    if not value.startswith("+") and not default_region:
         return None
     try:
-        number = phonenumbers.parse(value, None)
+        number = phonenumbers.parse(value, default_region)
     except phonenumbers.NumberParseException:
         return None
     if not phonenumbers.is_valid_number(number):
@@ -138,11 +138,15 @@ def _url_fields(value: str) -> tuple[str, dict[str, str], list[str]] | None:
     return normalized, fields, derived
 
 
-def _hinted(value: str, hint: IdentifierKind) -> InputResolution:
+def _hinted(
+    value: str,
+    hint: IdentifierKind,
+    default_phone_region: str | None = None,
+) -> InputResolution:
     if hint == IdentifierKind.EMAIL:
         normalized = _email(value)
     elif hint == IdentifierKind.PHONE:
-        normalized = _phone(value)
+        normalized = _phone(value, default_phone_region)
     elif hint == IdentifierKind.DOMAIN:
         normalized = _domain(value)
     elif hint == IdentifierKind.IP_ADDRESS:
@@ -169,16 +173,27 @@ def _hinted(value: str, hint: IdentifierKind) -> InputResolution:
         normalized = normalize.norm_text(value) if any(char.isalpha() for char in value) else None
     if not normalized:
         raise ValueError(f"starting value is not a valid {hint.value}")
+    reason = "type was supplied explicitly and the value passed validation"
+    if hint == IdentifierKind.PHONE and not value.startswith("+"):
+        reason = (
+            "type was supplied explicitly and the phone passed validation using "
+            f"the configured {default_phone_region} region"
+        )
     return InputResolution(
         kind=hint,
         normalized=normalized,
         confidence=1.0,
-        reasons=["type was supplied explicitly and the value passed validation"],
+        reasons=[reason],
         query_fields={hint.value: normalized},
     )
 
 
-def classify_input(value: str, hint: str | IdentifierKind | None = None) -> InputResolution:
+def classify_input(
+    value: str,
+    hint: str | IdentifierKind | None = None,
+    *,
+    default_phone_region: str | None = None,
+) -> InputResolution:
     """Classify one value without turning an ambiguous string into several seeds."""
     cleaned = _clean(value)
     if hint is not None:
@@ -187,7 +202,7 @@ def classify_input(value: str, hint: str | IdentifierKind | None = None) -> Inpu
         except ValueError as exc:
             choices = ", ".join(kind.value for kind in IdentifierKind)
             raise ValueError(f"unknown input type; choose one of: {choices}") from exc
-        return _hinted(cleaned, kind)
+        return _hinted(cleaned, kind, default_phone_region)
 
     normalized_email = _email(cleaned)
     if normalized_email:
@@ -224,13 +239,17 @@ def classify_input(value: str, hint: str | IdentifierKind | None = None) -> Inpu
             query_fields={"ip_address": address.compressed},
         )
 
-    normalized_phone = _phone(cleaned)
+    normalized_phone = _phone(cleaned, default_phone_region)
     if normalized_phone:
         return InputResolution(
             kind=IdentifierKind.PHONE,
             normalized=normalized_phone,
             confidence=0.99,
-            reasons=["valid international phone number"],
+            reasons=[
+                "valid international phone number"
+                if cleaned.startswith("+")
+                else f"valid phone number using configured {default_phone_region} region"
+            ],
             query_fields={"phone": normalized_phone},
         )
 
@@ -285,6 +304,7 @@ def resolve_query(
     subject: str | None = None,
     *,
     hint: str | IdentifierKind | None = None,
+    default_phone_region: str | None = None,
     **identifiers: str | None,
 ) -> tuple[Any, dict[str, Any]]:
     """Merge one auto-classified subject with optional explicitly typed fields."""
@@ -294,7 +314,11 @@ def resolve_query(
     fields = explicit.model_dump(exclude_none=True)
     resolution: InputResolution | None = None
     if subject:
-        resolution = classify_input(subject, hint=hint)
+        resolution = classify_input(
+            subject,
+            hint=hint,
+            default_phone_region=default_phone_region,
+        )
         for key, value in resolution.query_fields.items():
             if key in fields and fields[key] != value:
                 raise ValueError(f"starting value conflicts with explicit {key}")

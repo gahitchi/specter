@@ -701,8 +701,21 @@ async function loadReview() {
   let html = "<table><thead><tr><th>automated</th><th>source</th><th>evidence</th><th>review</th></tr></thead><tbody>";
   for (const o of data.observations) {
     const current = o.review ? `<span class="review-${esc(o.review.decision)}">${esc(o.review.decision)}</span>` : "unreviewed";
+    const lineage = [o.evidence_class, o.origin, o.temporal_status, o.completeness]
+      .filter(Boolean).map(esc).join(" · ");
+    const dimensions = o.confidence_dimensions || {};
+    const provenance = (o.extractions || []).map((item) =>
+      `<li><b>${esc(item.location || "source output")}</b> via ${esc(item.method || "collector")}`
+      + `${item.context ? `<br><small>${esc(item.context)}</small>` : ""}</li>`).join("");
+    const evidenceDetail = `<details class="evidence-provenance"><summary>Why this evidence exists</summary>`
+      + `<p>${lineage || "Legacy observation without detailed lineage"}</p>`
+      + (provenance ? `<ul>${provenance}</ul>` : "<p>No value-level extraction was recorded.</p>")
+      + (Object.keys(dimensions).length
+        ? `<p>match ${Math.round((dimensions.match_quality || 0) * 100)}% · source ${Math.round((dimensions.source_reliability || 0) * 100)}% · transformation ${Math.round((dimensions.transformation_certainty || 0) * 100)}%</p>`
+        : "")
+      + `</details>`;
     html += `<tr><td><span class="v ${o.verdict}">${o.verdict}</span><br>${(+o.confidence).toFixed(2)}</td>`
-      + `<td>${esc(o.source)}</td><td><b>${esc(o.label)}</b><br><small class="tag">${esc((o.reasons||[]).join(" · "))}</small></td>`
+      + `<td>${esc(o.source)}${lineage ? `<br><small class="tag">${lineage}</small>` : ""}</td><td><b>${esc(o.label)}</b><br><small class="tag">${esc((o.reasons||[]).join(" · "))}</small>${evidenceDetail}</td>`
       + `<td><div class="review-current">${current}</div><input class="review-note" data-observation="${o.id}" maxlength="4000" placeholder="review note" value="${esc((o.review||{}).note||"")}" />`
       + `<div class="review-actions" data-observation="${o.id}"><button data-decision="accepted">Accept</button><button data-decision="rejected" class="danger">Reject</button><button data-decision="unresolved" class="secondary">Unresolved</button></div></td></tr>`;
   }
@@ -1891,6 +1904,18 @@ async function loadAnalytics() {
   const mix = a.verdict_mix, total = Object.values(mix).reduce((x, y) => x + y, 0) || 1;
   $("#conf-verdicts").innerHTML = Object.entries(mix).sort((x, y) => y[1] - x[1]).map(([v, c]) =>
     `<div class="vmix"><span class="v ${v}">${v}</span> <span class="bar"><span style="width:${Math.round(c / total * 100)}%"></span></span> ${c}</div>`).join("");
+
+  const q = a.quality || {};
+  const percent = (value) => `${Math.round((value || 0) * 100)}%`;
+  $("#conf-quality").innerHTML = "<table><thead><tr><th>measure</th><th>result</th></tr></thead><tbody>"
+    + `<tr><td>Origin recorded</td><td>${percent(q.origin_coverage)}</td></tr>`
+    + `<tr><td>Extraction recorded</td><td>${percent(q.extraction_coverage)}</td></tr>`
+    + `<tr><td>Observation time recorded</td><td>${percent(q.temporal_coverage)}</td></tr>`
+    + `<tr><td>Duplicate leads collapsed</td><td>${percent(q.duplicate_collapse_rate)}</td></tr>`
+    + `<tr><td>Automatic pivots blocked by policy</td><td>${q.automatic_pivots_blocked || 0}</td></tr>`
+    + `<tr><td>Contradictions requiring review</td><td>${q.contradictions || 0}</td></tr>`
+    + `<tr><td>Parser failure rate</td><td>${percent(q.parser_failure_rate)}</td></tr>`
+    + "</tbody></table>";
 
   $("#conf-terms").innerHTML = a.top_terms.length
     ? "<table><thead><tr><th>signal</th><th>count</th><th>mean Δ</th></tr></thead><tbody>"

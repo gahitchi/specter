@@ -302,6 +302,10 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(1) from None
 
     desktop_settings = load_desktop_settings()
+    if "RECON_MAIGRET_ENABLED" not in os.environ:
+        os.environ["RECON_MAIGRET_ENABLED"] = (
+            "true" if desktop_settings.maigret_enabled else "false"
+        )
     start_workers = not args.no_workers and (
         args.headless or desktop_settings.background_services
     )

@@ -1,11 +1,13 @@
 """Offline tests for non-network collector logic and clustering."""
 
 import phonenumbers
+import pytest
 
 from recon.collectors.email import gravatar_hash
+from recon.collectors.phone import collect as collect_phone
 from recon.correlate.cluster import cluster
 from recon.correlate.score import score_identity
-from recon.models import Finding, Verdict
+from recon.models import Finding, Query, Verdict
 
 
 def test_gravatar_hash_is_md5_of_normalized_email():
@@ -17,6 +19,35 @@ def test_gravatar_hash_is_md5_of_normalized_email():
 def test_phone_parsing_offline():
     num = phonenumbers.parse("+14155552671", None)
     assert phonenumbers.is_valid_number(num)
+
+
+@pytest.mark.asyncio
+async def test_phone_collector_explains_allocation_metadata_and_formats():
+    findings = []
+
+    async def emit(item):
+        findings.append(item)
+
+    await collect_phone(Query(phone="(415) 555-2671"), None, emit, default_region="US")
+
+    assert findings[0].verdict == Verdict.FOUND
+    assert findings[0].data["e164"] == "+14155552671"
+    assert findings[0].data["region_code"] == "US"
+    assert findings[0].data["rfc3966"] == "tel:+1-415-555-2671"
+    assert "not subscriber identity" in findings[0].reasons[1]
+
+
+@pytest.mark.asyncio
+async def test_phone_collector_rejects_impossible_number_without_a_lookup():
+    findings = []
+
+    async def emit(item):
+        findings.append(item)
+
+    await collect_phone(Query(phone="+1 415555267"), None, emit)
+
+    assert findings[0].verdict == Verdict.NOT_FOUND
+    assert "not possible" in findings[0].reasons[0]
 
 
 def test_cluster_merges_on_shared_strong_signal():

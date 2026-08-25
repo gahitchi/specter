@@ -26,6 +26,7 @@ from .activity import ACTIVE_PROCESS_ID, artifact_activity_id
 from .config import SETTINGS, Settings
 from .correlate import score
 from .correlate.cluster import cluster, identity_bearing
+from .evidence import assess_promotion
 from .graph_models import Artifact, ArtifactType
 from .http_client import RateLimitedClient, RequestBudgetExceeded
 from .keys import VAULT, redact
@@ -147,6 +148,15 @@ class GraphScanEngine:
         self.reasoner = InvestigationReasoner()
         # Traversal state.
         self._seen: set[str] = set()
+        self._artifact_by_key: dict[str, Artifact] = {}
+        self._promotion_origins: dict[str, set[str]] = {}
+        self._queued: set[str] = set()
+        self.promotion_stats = {
+            "attempted": 0,
+            "duplicates_collapsed": 0,
+            "blocked": 0,
+            "promoted_after_corroboration": 0,
+        }
 
     @staticmethod
     def _priority(art: Artifact) -> tuple:
@@ -158,18 +168,34 @@ class GraphScanEngine:
         """Record an artifact as a graph node (deduped, budgeted). Returns True
         if it is newly admitted."""
         if art.key in self._seen:
+            self.promotion_stats["duplicates_collapsed"] += 1
             return False
         if len(self._seen) >= self.settings.max_artifacts:
             self.stop_reason = self.stop_reason or "max_artifacts reached"
             return False
         self._seen.add(art.key)
         self.artifacts.append(art)
+        self._artifact_by_key[art.key] = art
         return True
 
     def _should_expand(self, art: Artifact) -> bool:
         if art.depth > self.settings.max_depth:
             return False
-        return self.scope.in_scope(art)
+        origins = len(self._promotion_origins.get(art.key, set()))
+        assessment = assess_promotion(art.policy, origins)
+        art.data["promotion"] = assessment.model_dump(mode="json")
+        return assessment.allowed and self.scope.in_scope(art)
+
+    def _register_promotion_origin(self, art: Artifact) -> None:
+        origin = str(
+            (art.origin.independence_key if art.origin is not None else "")
+            or art.data.get("independence_key")
+            or art.data.get("origin")
+            or art.source_module
+            or "unknown"
+        ).strip().casefold()
+        if origin:
+            self._promotion_origins.setdefault(art.key, set()).add(origin)
 
     def _module_enabled(self, mod) -> bool:
         if self.settings.passive_only and not mod.passive:
@@ -212,12 +238,28 @@ class GraphScanEngine:
         state = {"next": []}
 
         async def emit_artifact(a: Artifact) -> bool:
+            self.promotion_stats["attempted"] += 1
             if a.parent_key:  # always record provenance, even for dup/oob nodes
                 self.edges.append(_Edge(a.parent_key, a.key, a.source_module, a.data.get("edge", {})))
-            if not self._admit_node(a):
+            before = len(self._promotion_origins.get(a.key, set()))
+            self._register_promotion_origin(a)
+            admitted = self._admit_node(a)
+            stored = self._artifact_by_key.get(a.key, a)
+            if not admitted:
+                if (
+                    a.key not in self._queued
+                    and before < len(self._promotion_origins.get(a.key, set()))
+                    and self._should_expand(stored)
+                ):
+                    state["next"].append(stored)
+                    self._queued.add(a.key)
+                    self.promotion_stats["promoted_after_corroboration"] += 1
                 return False
-            if self._should_expand(a):
-                state["next"].append(a)
+            if self._should_expand(stored):
+                state["next"].append(stored)
+                self._queued.add(a.key)
+            elif not stored.data.get("promotion", {}).get("allowed", True):
+                self.promotion_stats["blocked"] += 1
             return True
 
         def process_outcome(metrics: dict) -> str:
@@ -250,6 +292,8 @@ class GraphScanEngine:
                     frontier: list[Artifact] = []
                     for seed in self.query.to_seed_artifacts():
                         if self._admit_node(seed):
+                            self._register_promotion_origin(seed)
+                            self._queued.add(seed.key)
                             frontier.append(seed)
                             await emit_activity({
                                 "kind": "artifact",

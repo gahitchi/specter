@@ -70,6 +70,7 @@ async def _cmd_scan(args) -> int:
         query, intake = resolve_query(
             args.subject,
             hint=args.subject_type,
+            default_phone_region=SETTINGS.phone_default_region,
             username=args.username,
             email=args.email,
             phone=args.phone,

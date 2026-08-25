@@ -19,6 +19,7 @@ def test_desktop_settings_round_trip(tmp_path):
         notifications=False,
         close_to_tray=True,
         background_services=False,
+        maigret_enabled=True,
         zoom_percent=125,
         window_width=1280,
         window_height=800,
@@ -46,6 +47,7 @@ def test_desktop_settings_reject_invalid_types_and_bound_numbers(tmp_path):
     assert settings.check_for_updates is True
     assert settings.notifications is True
     assert settings.close_to_tray is True
+    assert settings.maigret_enabled is False
     assert settings.zoom_percent == 175
     assert settings.window_width == 1024
     assert settings.window_height == 2160

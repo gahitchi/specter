@@ -40,10 +40,24 @@ def entity_confidence(observations: list[m.Observation], flags: list[str],
     num = sum(o.confidence * (o.reliability or 0.5) for o in hits)
     den = sum(o.reliability or 0.5 for o in hits)
     bd.base = round(num / den if den else 0.0, 3)
+    dimension_names = (
+        "match_quality", "source_reliability", "recency", "independence",
+        "transformation_certainty", "completeness",
+    )
+    for name in dimension_names:
+        values = [
+            float(getattr(o, "confidence_dimensions", {})[name])
+            for o in hits
+            if getattr(o, "confidence_dimensions", None)
+            and name in getattr(o, "confidence_dimensions", {})
+        ]
+        if values:
+            bd.dimensions[name] = round(sum(values) / len(values), 3)
 
-    found_sources = [o.source for o in hits if o.verdict == "FOUND"]
+    found_observations = [o for o in hits if o.verdict == "FOUND"]
+    found_sources = [o.source for o in found_observations]
     name_distinct = len(set(found_sources))
-    classes, redundant = independent_classes(found_sources)
+    classes, redundant = independent_classes(found_observations)
 
     name_breadth = _breadth(name_distinct)
     class_breadth = _breadth(len(classes))

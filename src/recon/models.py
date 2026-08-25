@@ -7,6 +7,14 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel, Field
 
+from .evidence import (
+    Completeness,
+    ConfidenceDimensions,
+    EvidenceOrigin,
+    EvidencePolicy,
+    ExtractionProvenance,
+    TemporalEvidence,
+)
 from .explain import ScoreBreakdown
 
 if TYPE_CHECKING:
@@ -37,11 +45,21 @@ class Query(BaseModel):
     ip_address: Optional[str] = None
 
     @classmethod
-    def from_input(cls, value: str, hint: str | None = None) -> "Query":
+    def from_input(
+        cls,
+        value: str,
+        hint: str | None = None,
+        *,
+        default_phone_region: str | None = None,
+    ) -> "Query":
         """Classify one starting value and create the strongest safe seed set."""
         from .identifiers import classify_input
 
-        return cls(**classify_input(value, hint=hint).query_fields)
+        return cls(**classify_input(
+            value,
+            hint=hint,
+            default_phone_region=default_phone_region,
+        ).query_fields)
 
     def normalized(self) -> "Query":
         # Single normalization layer so collectors + correlation agree on values.
@@ -153,6 +171,12 @@ class Finding(BaseModel):
     # Strong identity signals for clustering (e.g. {"gravatar_hash": "..."}).
     signals: dict[str, str] = Field(default_factory=dict)
     data: dict[str, Any] = Field(default_factory=dict)
+    origin: Optional[EvidenceOrigin] = None
+    extractions: list[ExtractionProvenance] = Field(default_factory=list)
+    temporal: TemporalEvidence = Field(default_factory=TemporalEvidence)
+    completeness: Completeness = Completeness.UNKNOWN
+    confidence_dimensions: Optional[ConfidenceDimensions] = None
+    policy: EvidencePolicy = Field(default_factory=EvidencePolicy)
 
     @property
     def is_hit(self) -> bool:

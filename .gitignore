@@ -22,6 +22,7 @@ env/
 htmlcov/
 audit-requirements.txt
 .codex-tmp-*/
+.test-tmp/
 .test-tmp-*/
 
 # Local runtime state

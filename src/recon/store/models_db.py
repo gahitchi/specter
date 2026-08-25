@@ -83,6 +83,21 @@ class Observation(Base):
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     fingerprint: Mapped[Optional[str]] = mapped_column(String(32), index=True)
     reliability: Mapped[float] = mapped_column(Float, default=0.5)
+    collector: Mapped[Optional[str]] = mapped_column(String(120), index=True)
+    origin: Mapped[Optional[str]] = mapped_column(String(240), index=True)
+    evidence_class: Mapped[Optional[str]] = mapped_column(String(40), index=True)
+    independence_key: Mapped[Optional[str]] = mapped_column(String(200), index=True)
+    claim_key: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    extractions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    confidence_dimensions: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, default=None)
+    policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    completeness: Mapped[Optional[str]] = mapped_column(String(20), index=True)
+    temporal_status: Mapped[Optional[str]] = mapped_column(String(20), index=True)
+    observed_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    valid_from: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    first_seen_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     run: Mapped[Run] = relationship(back_populates="observations")
@@ -90,6 +105,35 @@ class Observation(Base):
     reviews: Mapped[list["ObservationReview"]] = relationship(
         back_populates="observation", order_by="ObservationReview.id"
     )
+
+
+class ObservationContradiction(Base):
+    """An explicit conflict between two temporal observations of one claim."""
+
+    __tablename__ = "observation_contradictions"
+    __table_args__ = (
+        UniqueConstraint(
+            "earlier_observation_id",
+            "later_observation_id",
+            "kind",
+            name="uq_observation_contradiction",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("runs.id"), index=True)
+    target_id: Mapped[int] = mapped_column(ForeignKey("targets.id"), index=True)
+    claim_key: Mapped[str] = mapped_column(String(64), index=True)
+    earlier_observation_id: Mapped[int] = mapped_column(
+        ForeignKey("observations.id"), index=True
+    )
+    later_observation_id: Mapped[int] = mapped_column(
+        ForeignKey("observations.id"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(60), index=True)
+    severity: Mapped[str] = mapped_column(String(20), default="medium", index=True)
+    reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class ObservationReview(Base):

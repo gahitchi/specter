@@ -53,6 +53,19 @@ They were not published releases; their changes are included in 0.11.0.
   one-command uninstallers that preserve local investigations and settings.
 - A distinct Specter ghost icon for the desktop window, tray, Start menu,
   Linux application menu, and local web workspace.
+- A shared bounded public-document analyzer for visible text, safe links,
+  contact data, social profiles, and guarded JSON-LD phone evidence.
+- A versioned external-observation contract, secret-scrubbed subprocess runner,
+  and disabled-by-default Maigret pilot that emits candidate URLs only.
+- A desktop Research sources setting that exposes Maigret only when its optional
+  component is installed and clearly requests a restart when the choice changes.
+- Evidence Model v2 with first-class source origins, independence identities,
+  value-level extraction provenance, temporal validity, completeness, explicit
+  contradiction records, decomposed confidence inputs, and policy-gated pivots.
+- Adapter conformance checks, sanitized replay fixtures, adversarial parser
+  coverage, Maigret version compatibility reporting, and evidence-quality
+  metrics for provenance coverage, duplicate collapse, blocked pivots,
+  contradictions, parser failures, and timeouts.
 
 ### Changed
 
@@ -82,6 +95,12 @@ They were not published releases; their changes are included in 0.11.0.
   web or worker startup.
 - Infrastructure observations no longer create person-identity entities, and a
   shared domain is no longer sufficient to merge identities.
+- Profile-link enrichment no longer scans raw scripts with regular expressions;
+  blocked, unsupported, and truncated pages now preserve uncertainty explicitly.
+- Candidate-only evidence remains visible but cannot steer automatic research.
+  Contact details extracted from public pages require independent corroboration
+  before recursive expansion, and historical observations no longer contribute
+  to current identity clusters.
 
 ### Security
 

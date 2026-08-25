@@ -26,7 +26,9 @@ from .models import Finding, Query, Verdict
 from .modules.base import ModuleContext
 from .modules.registry import MODULES
 
-Interaction = Literal["offline", "dns", "public-api", "public-page", "mixed"]
+Interaction = Literal[
+    "offline", "dns", "public-api", "public-page", "external-tool", "mixed"
+]
 
 
 @dataclass(frozen=True)
@@ -41,7 +43,14 @@ class SourceContract:
     reviewed_on: str = "2026-08-13"
 
     def as_dict(self) -> dict:
-        return dataclasses.asdict(self)
+        payload = dataclasses.asdict(self)
+        payload["origin_identity"] = self.operator
+        payload["evidence_class"] = {
+            "offline": "offline",
+            "external-tool": "external_tool",
+            "mixed": "aggregated",
+        }.get(self.interaction, "direct")
+        return payload
 
 
 def _c(module, operator, interaction, evidence, data_sent, rate_policy, terms_scope):
@@ -62,11 +71,21 @@ CONTRACTS = {
         _c("username", "configured site operators", "public-page", "profile existence",
            ["username", "random control username"], "shared per-host limiter",
            "Each configured site's terms and robots policy apply."),
+        _c("maigret", "Maigret and selected site operators", "external-tool",
+           "candidate username-profile responses; never identity confirmation", ["username"],
+           "disabled by default; 25 sites, four connections, eight-second site timeout, "
+           "120-second process timeout; external requests are not in the Specter HTTP budget",
+           "Maigret's license and each selected site's terms and robots policy apply."),
         _c("email", "Automattic and DNS operators", "mixed", "avatar and MX records",
            ["MD5 email identifier", "email domain"], "shared HTTP limiter; DNS resolver policy",
            "Gravatar public avatar protocol and DNS operator terms apply."),
         _c("phone", "none", "offline", "number structure and carrier metadata", [],
            "no network traffic", "Local libphonenumber data only."),
+        _c("phone_web", "DuckDuckGo and discovered public-page operators", "public-page",
+           "direct public-page phone mentions and same-record structured identity fields",
+           ["exact phone-format queries", "discovered public page URLs"],
+           "two sequential searches and at most six direct pages; shared per-host limiter",
+           "DuckDuckGo and each discovered site's terms and robots policy apply."),
         _c("name", "ORCID and OpenAlex", "public-api", "scholarly author records", ["name"],
            "shared per-host limiter", "ORCID and OpenAlex API policies apply."),
         _c("domain", "DNS, RDAP, and crt.sh operators", "mixed",

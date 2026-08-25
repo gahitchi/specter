@@ -41,6 +41,7 @@ class DesktopSettings:
     notifications: bool = True
     close_to_tray: bool = False
     background_services: bool = True
+    maigret_enabled: bool = False
     zoom_percent: int = 100
     window_width: int = 1440
     window_height: int = 900
@@ -67,6 +68,7 @@ class DesktopSettings:
             notifications=boolean("notifications"),
             close_to_tray=boolean("close_to_tray"),
             background_services=boolean("background_services"),
+            maigret_enabled=boolean("maigret_enabled"),
             zoom_percent=integer("zoom_percent", 75, 175),
             window_width=integer("window_width", 1024, 3840),
             window_height=integer("window_height", 700, 2160),

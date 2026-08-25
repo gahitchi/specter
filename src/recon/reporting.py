@@ -43,11 +43,17 @@ def to_json(query, findings, summary) -> str:
 def to_csv(findings: list[Finding]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["verdict", "confidence", "category", "source", "label", "url", "reasons"])
+    w.writerow([
+        "verdict", "confidence", "category", "source", "label", "url", "reasons",
+        "origin", "evidence_class", "observed_at", "completeness",
+    ])
     for f in findings:
         w.writerow([_csv_cell(value) for value in (
             f.verdict.value, f.confidence, f.category, f.source, f.label,
-            f.url or "", " | ".join(f.reasons),
+            f.url or "", " | ".join(f.reasons), f.origin.origin if f.origin else "",
+            f.origin.evidence_class.value if f.origin else "",
+            f.temporal.observed_at.isoformat() if f.temporal.observed_at else "",
+            f.completeness.value,
         )])
     return buf.getvalue()
 
@@ -104,7 +110,13 @@ def to_pdf_html(query, findings, summary) -> str:
         f"<tr class='{f.verdict.value}'><td>{f.verdict.value}</td>"
         f"<td>{f.confidence:.2f}</td><td>{html.escape(f.source)}</td>"
         f"<td>{html.escape(f.label)}</td>"
-        f"<td>{'<br>'.join(html.escape(reason) for reason in f.reasons)}</td></tr>"
+        f"<td>{'<br>'.join(html.escape(reason) for reason in f.reasons)}"
+        + (
+            f"<br><small>{html.escape(f.origin.evidence_class.value)} · "
+            f"{html.escape(f.origin.origin)} · {html.escape(f.completeness.value)}</small>"
+            if f.origin else ""
+        )
+        + "</td></tr>"
         for f in findings if f.is_notable
     )
     query_json = html.escape(json.dumps(query.model_dump(exclude_none=True)))
@@ -145,6 +157,7 @@ def entity_report(run_id: int) -> dict:
         target = s.get(m.Target, run.target_id)
         entities = repo.list_entities(s, run.target_id)
         changes = repo.list_changes(s, target_id=run.target_id)
+        contradictions = repo.contradictions_for_target(s, run.target_id)
         from .provenance import provenance
 
         return {
@@ -162,8 +175,20 @@ def entity_report(run_id: int) -> dict:
                     "evidence": [
                         {"source": o.source, "label": o.label, "url": o.url,
                          "verdict": o.verdict, "confidence": o.confidence,
-                         "reliability": o.reliability, "reasons": o.reasons}
-                        for o in e.observations if o.verdict == "FOUND"
+                         "reliability": o.reliability, "reasons": o.reasons,
+                         "origin": o.origin, "evidence_class": o.evidence_class,
+                         "independence_key": o.independence_key,
+                         "extractions": o.extractions or [],
+                         "confidence_dimensions": o.confidence_dimensions,
+                         "temporal_status": o.temporal_status,
+                         "observed_at": o.observed_at.isoformat() if o.observed_at else None,
+                         "first_seen_at": (
+                             o.first_seen_at.isoformat() if o.first_seen_at else None
+                         ),
+                         "last_seen_at": o.last_seen_at.isoformat() if o.last_seen_at else None,
+                         "completeness": o.completeness}
+                        for o in e.observations
+                        if o.verdict == "FOUND" and o.temporal_status != "historical"
                     ],
                 }
                 for e in entities
@@ -172,6 +197,19 @@ def entity_report(run_id: int) -> dict:
                 {"kind": c.kind, "source": c.source, "label": c.label,
                  "detail": c.detail, "at": c.created_at.isoformat()}
                 for c in changes
+            ],
+            "contradictions": [
+                {
+                    "id": c.id,
+                    "claim_key": c.claim_key,
+                    "earlier_observation_id": c.earlier_observation_id,
+                    "later_observation_id": c.later_observation_id,
+                    "kind": c.kind,
+                    "severity": c.severity,
+                    "reasons": c.reasons,
+                    "at": c.created_at.isoformat(),
+                }
+                for c in contradictions
             ],
         }
 

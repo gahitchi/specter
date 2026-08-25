@@ -163,6 +163,14 @@ async def scan(query: Query, *, label: str | None = None, watchlist: bool = Fals
                     "reasoning": engine.reasoning,
                     "intake": intake,
                     "profile": entities["profile"],
+                    "quality": {
+                        **engine.promotion_stats,
+                        "origin_coverage": sum(f.origin is not None for f in findings),
+                        "extraction_coverage": sum(bool(f.extractions) for f in findings),
+                        "partial_observations": sum(
+                            f.completeness.value == "partial" for f in findings
+                        ),
+                    },
                 })
             return entities, changes
 

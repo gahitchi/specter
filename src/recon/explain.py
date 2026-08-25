@@ -33,6 +33,7 @@ class ScoreBreakdown(BaseModel):
     total: float = 0.0
     shadow_total: Optional[float] = None
     shadow_note: Optional[str] = None
+    dimensions: dict[str, float] = Field(default_factory=dict)
 
     def add(self, term: str, delta: float, reason: str = "",
             layer: str = "verdict") -> "ScoreBreakdown":

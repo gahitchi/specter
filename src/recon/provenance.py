@@ -16,6 +16,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import SETTINGS
+from .evidence import EVIDENCE_MODEL_VERSION
 
 _TRACKED = ("httpx", "sqlalchemy", "jellyfish", "phonenumbers", "dnspython", "fastapi")
 
@@ -76,6 +77,13 @@ def provenance(settings=SETTINGS) -> dict:
             "version": 1,
             "adaptive_dispatch": True,
             "evidence_bound": True,
+        },
+        "evidence_model": {
+            "version": EVIDENCE_MODEL_VERSION,
+            "origin_identity": True,
+            "temporal_state": True,
+            "policy_gated_pivots": True,
+            "explicit_contradictions": True,
         },
         "dependencies": {pkg: _ver(pkg) for pkg in _TRACKED},
         "argv": " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "",

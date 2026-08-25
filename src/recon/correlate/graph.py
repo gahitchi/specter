@@ -94,6 +94,7 @@ def correlate_run(db, run_id: int) -> dict:
             observation
             for observation in repo.observations_for_target(s, target_id, hits_only=True)
             if identity_bearing(observation.category)
+            and observation.temporal_status != "historical"
         ]
 
         records = [record_from(o.id, o.category, o.label, o.signals) for o in obs]
@@ -148,6 +149,21 @@ def correlate_run(db, run_id: int) -> dict:
             recs = [records[k] for k in idxs]
             cl_obs = [obs_by_oid[records[k].obs_id] for k in idxs]
             flags = coherence.check(recs)
+            cluster_observation_ids = {observation.id for observation in cl_obs}
+            contradictions = list(s.execute(
+                select(m.ObservationContradiction).where(
+                    (m.ObservationContradiction.earlier_observation_id.in_(
+                        cluster_observation_ids
+                    ))
+                    | (m.ObservationContradiction.later_observation_id.in_(
+                        cluster_observation_ids
+                    ))
+                )
+            ).scalars().all())
+            for contradiction in contradictions:
+                flag = f"evidence-contradiction:{contradiction.kind}"
+                if flag not in flags:
+                    flags.append(flag)
             attrs = _merge_attributes(recs)
             canonical = _resolve_conflicts(recs, cl_obs)
             if canonical:
@@ -169,8 +185,10 @@ def correlate_run(db, run_id: int) -> dict:
                 "breakdown": bd.model_dump(),
                 "signals": attrs,
                 "flags": flags,
-                "corroboration": corroboration([o.source for o in cl_obs
-                                                if o.verdict == "FOUND"]),
+                "corroboration": corroboration([
+                    o for o in cl_obs if o.verdict == "FOUND"
+                ]),
+                "contradictions": len(contradictions),
                 "found": sum(1 for o in cl_obs if o.verdict == "FOUND"),
                 "uncertain": sum(1 for o in cl_obs if o.verdict == "UNCERTAIN"),
                 "sources": sorted({o.source for o in cl_obs}),

@@ -56,9 +56,13 @@ def top_breakdown_terms(rows, limit: int = 8) -> list[dict]:
 def independence_coverage(rows) -> dict:
     """Across FOUND findings, distinct source *names* vs independent *classes* —
     the corroboration-inflation factor the 5a shadow score corrects for."""
-    found = [r for r in rows if r.verdict == "FOUND"]
+    found = [
+        r for r in rows
+        if r.verdict == "FOUND"
+        and getattr(r, "temporal_status", None) != "historical"
+    ]
     sources = {r.source for r in found}
-    classes, redundant = independent_classes(sources)
+    classes, redundant = independent_classes(found)
     n_names, n_classes = len(sources), len(classes)
     return {
         "found": len(found),
@@ -89,6 +93,50 @@ def calibration_drift(cal_runs) -> list[dict]:
     } for c in cal_runs]
 
 
+def quality_metrics(rows, runs, artifacts, contradictions) -> dict:
+    """Operational evidence-quality indicators with explicit denominators."""
+    total = len(rows)
+    quality = [getattr(run, "stats", {}).get("quality", {}) for run in runs]
+    attempted = sum(int(item.get("attempted", 0)) for item in quality)
+    duplicates = sum(int(item.get("duplicates_collapsed", 0)) for item in quality)
+    blocked = sum(int(item.get("blocked", 0)) for item in quality)
+    parser_failures = sum(
+        row.verdict == "ERROR"
+        and row.source in {"phone:web", "profile:enrich"}
+        for row in rows
+    )
+    timeouts = sum(
+        row.verdict == "ERROR"
+        and "timeout" in " ".join(row.reasons or []).casefold()
+        for row in rows
+    )
+    return {
+        "origin_coverage": round(
+            sum(bool(getattr(row, "origin", None)) for row in rows) / total, 3
+        ) if total else 0.0,
+        "extraction_coverage": round(
+            sum(bool(getattr(row, "extractions", None)) for row in rows) / total, 3
+        ) if total else 0.0,
+        "temporal_coverage": round(
+            sum(bool(getattr(row, "observed_at", None)) for row in rows) / total, 3
+        ) if total else 0.0,
+        "partial_observations": sum(
+            getattr(row, "completeness", None) == "partial" for row in rows
+        ),
+        "historical_observations": sum(
+            getattr(row, "temporal_status", None) == "historical" for row in rows
+        ),
+        "contradictions": len(contradictions),
+        "contradiction_rate": round(len(contradictions) / total, 3) if total else 0.0,
+        "artifact_attempts": attempted,
+        "duplicate_collapse_rate": round(duplicates / attempted, 3) if attempted else 0.0,
+        "automatic_pivots_blocked": blocked,
+        "parser_failure_rate": round(parser_failures / total, 3) if total else 0.0,
+        "module_timeout_rate": round(timeouts / total, 3) if total else 0.0,
+        "artifacts_recorded": len(artifacts),
+    }
+
+
 def compute(db) -> dict:
     from sqlalchemy import select
 
@@ -99,6 +147,11 @@ def compute(db) -> dict:
         sources = list(s.execute(select(m.Source)).scalars().all())
         cals = list(s.execute(
             select(m.CalibrationRun).order_by(m.CalibrationRun.id)).scalars().all())
+        runs = list(s.execute(select(m.Run)).scalars().all())
+        artifacts = list(s.execute(select(m.ArtifactNode)).scalars().all())
+        contradictions = list(s.execute(
+            select(m.ObservationContradiction)
+        ).scalars().all())
     return {
         "n_observations": len(obs),
         "confidence_histogram": confidence_histogram(obs),
@@ -107,4 +160,5 @@ def compute(db) -> dict:
         "independence_coverage": independence_coverage(obs),
         "source_health": source_health(sources),
         "calibration_drift": calibration_drift(cals),
+        "quality": quality_metrics(obs, runs, artifacts, contradictions),
     }

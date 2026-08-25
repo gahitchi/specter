@@ -92,7 +92,7 @@ jobs:
           names=set(archive.namelist());
           entry_name=next(name for name in names if name.endswith('.dist-info/entry_points.txt'));
           entry_points=archive.read(entry_name).decode();
-          required={'recon/desktop.py','recon/desktop_settings.py','recon/assets/specter.ico','recon/assets/specter.png','recon/updater.py','recon/web/index.html','recon/web/app.js','recon/web/style.css','recon/data/sites.json','recon/data/calibration_labels.json','recon/migrations/versions/20260813_0001_maturity_schema.py','recon/migrations/versions/20260814_0004_job_activity.py'};
+          required={'recon/desktop.py','recon/desktop_settings.py','recon/evidence.py','recon/adapters/base.py','recon/adapters/conformance.py','recon/adapters/maigret.py','recon/assets/specter.ico','recon/assets/specter.png','recon/updater.py','recon/web/index.html','recon/web/app.js','recon/web/style.css','recon/data/sites.json','recon/data/calibration_labels.json','recon/migrations/versions/20260813_0001_maturity_schema.py','recon/migrations/versions/20260814_0004_job_activity.py','recon/migrations/versions/20260825_0005_evidence_model_v2.py'};
           assert required <= names, required-names;
           assert 'specter-app = recon.launch:main' in entry_points"
       - name: Validate operator scripts
@@ -100,7 +100,7 @@ jobs:
       - run: uv run bandit -q -c pyproject.toml -r src scripts
       - name: Audit locked runtime dependencies
         run: |
-          uv export --locked --extra desktop --extra pdf --extra postgres --extra distributed --extra secure --extra ml --no-dev --no-emit-project --format requirements-txt --output-file audit-requirements.txt
+          uv export --locked --extra desktop --extra pdf --extra postgres --extra distributed --extra secure --extra ml --extra maigret --no-dev --no-emit-project --format requirements-txt --output-file audit-requirements.txt
           uv run pip-audit --cache-dir .cache/pip-audit --no-deps --disable-pip -r audit-requirements.txt
 
   postgres:

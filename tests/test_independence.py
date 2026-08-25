@@ -24,6 +24,11 @@ def test_class_of_groups_rir_and_github():
     assert class_of("username:Keybase") != class_of("username:GitHub")
 
 
+def test_phone_web_is_independent_from_offline_numbering_metadata():
+    assert class_of("phone:validate") == "phone_offline"
+    assert class_of("phone:web") == "public_web"
+
+
 def test_independent_classes_collapses_redundant():
     classes, redundant = independent_classes(["asn", "ripestat", "ip_geo"])
     assert classes == {"rir"}

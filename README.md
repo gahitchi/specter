@@ -12,7 +12,7 @@ evidence summary, not proof of identity or a claim of completeness.
 
 ## What it does
 
-- Accepts one username, email address, international phone number, domain, name,
+- Accepts one username, email address, phone number, domain, name,
   public profile URL, or IP address and classifies it before collection starts.
 - Uses control probes, site-specific rules, response similarity, and block-page
   detection instead of treating every `200 OK` as a match.
@@ -194,9 +194,11 @@ The terminal also supports a single starting value for quick investigations.
 
 `specter scan VALUE` uses the same conservative classifier as the dashboard and
 API. Email, international phone, domain, URL, and IP syntax are recognized
-deterministically. A multi-word value is treated as a name. A single bare token
-is treated as a username but remains explicitly marked as an ambiguous
-classification. Use `--type` to override that interpretation:
+deterministically. National phone formats are also recognized when
+`RECON_PHONE_DEFAULT_REGION` is configured. A multi-word value is treated as a
+name. A single bare token is treated as a username but remains explicitly
+marked as an ambiguous classification. Use `--type` to override that
+interpretation:
 
 ```bash
 uv run specter scan mercury --type name
@@ -271,10 +273,96 @@ uv run specter scan --username torvalds
 ```
 
 Modules include username verification, Gravatar and MX evidence, DNS/RDAP/CT
-data, name sources, phone normalization, GitHub public-profile enrichment,
+data, name sources, evidence-first phone research, GitHub public-profile enrichment,
 Wayback and Common Crawl lookups, network/ASN data, breach checks, and optional
 keyed reputation sources. The default mode runs modules marked passive. Use
 `--active` only when you understand the additional target interaction.
+
+Public profile pages and phone-discovery pages pass through one bounded document
+analyzer. It separates visible content from scripts, resolves public links,
+extracts guarded JSON-LD, and rejects local or credential-bearing URLs before a
+module can treat them as evidence.
+
+### Phone research
+
+Phone research is a restrained public-web workflow, not an API aggregation
+screen. Specter first parses the number locally and reports numbering-plan
+facts such as canonical formats, region, line type, allocation carrier, and
+portability support. Those facts never identify the current subscriber and the
+interface says so explicitly.
+
+APIs remain internal enrichment tools where they add evidence; they are not the
+product surface and their responses are not stacked into a provider checklist.
+When a directly verified phone page yields a guarded email, name, or profile
+pivot, the existing modules can use appropriate APIs to deepen that lead.
+
+For public-web research, Specter submits at most two exact international-format
+queries to DuckDuckGo's HTML search, keeps at most six candidate pages, and
+fetches those pages directly through the shared rate limiter and robots policy.
+Search snippets are discovery hints only. A `FOUND` result requires the exact
+normalized phone on the directly retrieved page. Name, email, and profile
+pivots require the exact phone and those fields to occur in the same JSON-LD
+`Person` or `ProfilePage` record.
+
+The default workflow does not probe messenger accounts, trigger password
+recovery, query breach or infostealer services, or treat carrier metadata as
+ownership. Blocked and partially retrieved pages are `UNVERIFIABLE`, not false
+negatives. A clean bounded pass means only that no match was found in that pass.
+
+Traffic and national-number parsing can be tuned without adding providers:
+
+```bash
+RECON_PHONE_WEB_ENABLED=true
+RECON_PHONE_WEB_MAX_QUERIES=2
+RECON_PHONE_WEB_MAX_PAGES=6
+RECON_PHONE_DEFAULT_REGION=IT  # optional; required for ambiguous national formats
+```
+
+### Optional Maigret candidates
+
+Specter can optionally use Maigret as a small username-discovery helper. It is
+not part of the normal installation and is disabled by default. The adapter
+checks at most 25 sites with four connections, disables recursion and Maigret
+self-updates, and stops the process after two minutes. Specter does not pass API
+keys or stored credentials into that process.
+
+Maigret results are deliberately weaker than Specter's native verification. A
+reported page appears as an `UNCERTAIN` candidate URL; it never becomes a
+confirmed account, never creates an account-profile identity pivot, and never
+proves that two profiles share an owner. Native and Maigret observations for the
+same site count as one source lineage during corroboration.
+
+After the optional component is installed, the desktop Settings window exposes
+the source under Research sources and applies the choice on the next restart.
+When the component is absent, the setting says so instead of enabling a source
+that cannot run.
+
+Install and enable the optional adapter in a development checkout:
+
+```bash
+uv sync --extra desktop --extra maigret
+RECON_MAIGRET_ENABLED=true uv run specter
+```
+
+PowerShell equivalent:
+
+```powershell
+uv sync --extra desktop --extra maigret
+$env:RECON_MAIGRET_ENABLED = "true"
+uv run specter
+```
+
+For an isolated branch install, use:
+
+```bash
+pipx install --force 'osint-recon[desktop,maigret] @ git+https://github.com/gahitchi/osint-recon.git@gpt-branch'
+```
+
+The adapter's outbound site probes are governed by its own hard limits and are
+not included in Specter's native HTTP request counter or live request graph.
+This distinction is shown in the saved observation metadata. Site responses can
+change or produce false positives, so candidate pages still require direct,
+independent review.
 
 After the maturity gate passes, expansion mode also enables exact-profile
 lookups through the official [GitLab Users API](https://docs.gitlab.com/api/users/),
@@ -286,6 +374,44 @@ remain visible but gated before then.
 Every module has a source contract disclosing its operator, interaction type,
 evidence class, data sent, rate policy, and terms scope. The HTTP-only free
 `ip_geo` integration is retained for compatibility but disabled by default.
+
+### Evidence Model v2
+
+Specter stores an observation as more than a verdict and score. New saved
+evidence records include:
+
+- the collector, upstream origin, evidence class, and independence identity;
+- the input artifact, document URL, extraction method and location,
+  transformation chain, and retrieval time when available;
+- observed, first-seen, last-seen, validity, and current or historical state;
+- complete, partial, or unknown collection coverage;
+- separate match-quality, source-reliability, recency, independence,
+  transformation-certainty, and completeness dimensions; and
+- an evidence policy that independently controls confirmation and automatic
+  pivoting.
+
+Confidence does not grant permission. Candidate-only output is retained for
+review but cannot confirm an account or launch another request. A lead marked
+as requiring corroboration remains dormant until the same normalized artifact
+has support from the configured number of independent origins. This policy is
+enforced in the graph engine rather than left to collector convention.
+
+When the same stable claim changes between `FOUND` and `NOT_FOUND`, Specter
+creates a contradiction record and marks the earlier observation historical.
+It does not silently overwrite history, and historical evidence is excluded
+from current identity correlation. Contradictions are available through
+`GET /api/runs/{run_id}/contradictions`, saved reports, and the review UI.
+
+External tools use a bounded observation contract and adapter conformance
+checks. The Maigret pilot supports versions `>=0.6.4,<0.7`; the application
+reports missing, unknown, supported, and incompatible installations instead of
+assuming any executable has a compatible output format. Sanitized replay
+fixtures and adversarial parser tests run offline in CI.
+
+The Confidence quality view reports provenance and temporal coverage,
+duplicate-collapse rate, policy-blocked pivots, contradictions, parser failure
+rate, and module timeout rate. These are operational quality indicators, not a
+claim that the evidence is universally calibrated.
 
 ## Investigation reasoning
 

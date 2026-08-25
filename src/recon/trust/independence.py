@@ -40,6 +40,7 @@ _CLASS_TOKENS: dict[str, str] = {
     "shodan": "shodan",
     "virustotal": "virustotal",
     "orcid": "scholar", "openalex": "scholar", "name": "scholar",
+    "phone:web": "public_web",
     "phone": "phone_offline",
     "gravatar_hash": "gravatar",
 }
@@ -74,10 +75,19 @@ def class_of(source: str) -> str:
     prefix, _, rest = s.partition(":")
     if prefix == "username" and rest:
         return "site:" + (normalize.fold_handle(rest) or rest)
+    if prefix == "external" and rest.startswith("maigret:"):
+        platform = rest.partition(":")[2]
+        return "site:" + (normalize.fold_handle(platform) or platform)
     for token, cls in {**_CLASS_TOKENS, **_overrides()}.items():
         if token in s:
             return cls
     return prefix or s
+
+
+def class_of_observation(observation) -> str:
+    """Prefer persisted lineage and retain source-name inference for old rows."""
+    explicit = str(getattr(observation, "independence_key", "") or "").strip()
+    return explicit or class_of(str(getattr(observation, "source", "") or ""))
 
 
 def independent_classes(sources) -> tuple[set[str], list[tuple[str, str]]]:
@@ -85,8 +95,9 @@ def independent_classes(sources) -> tuple[set[str], list[tuple[str, str]]]:
     a redundant pair is a (source, class) collapsed into an already-counted class."""
     classes: set[str] = set()
     redundant: list[tuple[str, str]] = []
-    for src in sources:
-        cls = class_of(src)
+    for item in sources:
+        src = item if isinstance(item, str) else str(getattr(item, "source", "unknown"))
+        cls = class_of(src) if isinstance(item, str) else class_of_observation(item)
         if cls in classes:
             redundant.append((src, cls))
         else:
@@ -102,8 +113,12 @@ def corroboration(found_sources) -> dict:
     one independence class look broader than they truly are. Purely descriptive;
     it does not change any score, so no calibration gate is needed.
     """
-    names = sorted(set(found_sources))
-    classes, redundant = independent_classes(names)
+    items = list(found_sources)
+    names = sorted({
+        item if isinstance(item, str) else str(getattr(item, "source", "unknown"))
+        for item in items
+    })
+    classes, redundant = independent_classes(items)
     n_classes, n_names = len(classes), len(names)
     if n_classes >= 2:
         label = "corroborated"

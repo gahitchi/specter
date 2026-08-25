@@ -1,5 +1,4 @@
-"""PHONE module: offline libphonenumber metadata (via the existing collector).
-Terminal — it emits evidence but no further artifacts."""
+"""PHONE module: deterministic, offline numbering-plan metadata."""
 
 from __future__ import annotations
 
@@ -10,7 +9,12 @@ from .base import Module, ModuleContext
 
 
 async def _run(art: Artifact, ctx: ModuleContext) -> None:
-    await _phone.collect(Query(phone=art.value), ctx.client, ctx.emit_finding)
+    await _phone.collect(
+        Query(phone=art.value),
+        ctx.client,
+        ctx.emit_finding,
+        default_region=ctx.settings.phone_default_region,
+    )
 
 
 MODULE = Module(

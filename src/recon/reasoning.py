@@ -106,10 +106,12 @@ class InvestigationReasoner:
         novelty = 12.0 if module.produces - seen_types else 0.0
         identity_gain = 10.0 if found and module.produces & _IDENTITY_OUTPUTS else 0.0
         seed_verification = 8.0 if not found and artifact.depth == 0 else 0.0
+        policy = getattr(module, "evidence_policy", None)
+        trust_cost = 14.0 if policy is not None and policy.candidate_only else 0.0
         depth_cost = artifact.depth * 2.0
         score = (
             base + reliability + output_value * 0.2 + novelty + identity_gain
-            + seed_verification + artifact.confidence * 5.0 - depth_cost
+            + seed_verification + artifact.confidence * 5.0 - depth_cost - trust_cost
         )
         reasons = [f"{artifact.type.value} lead value {base:.0f}"]
         if novelty:
@@ -118,6 +120,8 @@ class InvestigationReasoner:
             reasons.append("can corroborate identity-bearing evidence")
         if seed_verification:
             reasons.append("directly tests a supplied identifier")
+        if trust_cost:
+            reasons.append("candidate-only output cannot pivot automatically")
         reasons.append(f"source prior {module.reliability_prior:.2f}")
         return round(score, 2), reasons
 
@@ -171,6 +175,11 @@ class InvestigationReasoner:
         artifact_types = Counter(artifact.type.value for artifact in artifacts)
         found = [finding for finding in findings if finding.verdict == Verdict.FOUND]
         distinct_sources = sorted({finding.source for finding in found})
+        policy_blocked = [
+            artifact for artifact in artifacts
+            if artifact.depth > 0
+            and not (artifact.data.get("promotion") or {}).get("allowed", True)
+        ]
         clusters = summary.get("clusters") or []
         independent_classes = max(
             (
@@ -218,6 +227,11 @@ class InvestigationReasoner:
         if out_of_scope:
             uncertainties.append(
                 f"{len(out_of_scope)} discovered pivot(s) were recorded but not followed."
+            )
+        if policy_blocked:
+            uncertainties.append(
+                f"{len(policy_blocked)} candidate or uncorroborated lead(s) were retained "
+                "without automatic expansion."
             )
 
         actions: dict[str, NextAction] = {}
@@ -316,6 +330,20 @@ class InvestigationReasoner:
                 requires=["documented authorization before scope expansion"],
                 inputs=[artifact.key for artifact in out_of_scope[:5]],
             ))
+        if policy_blocked:
+            add(NextAction(
+                id="review-policy-blocked-leads",
+                title="Review guarded leads",
+                rationale=(
+                    "Candidate and single-origin leads remain visible but cannot steer "
+                    "automatic collection without corroboration or review."
+                ),
+                priority="medium",
+                execution="manual",
+                status="needs_review",
+                confidence=0.96,
+                inputs=[artifact.key for artifact in policy_blocked[:5]],
+            ))
         if found and independent_classes >= 2:
             add(NextAction(
                 id="monitor-confirmed-evidence",
@@ -357,6 +385,7 @@ class InvestigationReasoner:
                 "confirmed_sources": distinct_sources,
                 "independent_classes": independent_classes,
                 "out_of_scope_pivots": len(out_of_scope),
+                "policy_blocked_pivots": len(policy_blocked),
                 "stop_reason": stop_reason,
             },
             uncertainties=uncertainties,
@@ -373,6 +402,7 @@ class InvestigationReasoner:
                     if passive_only else "Active collection was explicitly enabled for this scan."
                 ),
                 "Reasoning changed priority, never evidence or confidence scores.",
+                "Candidate-only and uncorroborated leads did not expand automatically.",
             ],
         )
         return report.model_dump()

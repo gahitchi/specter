@@ -90,7 +90,12 @@ class ScanPayload(BaseModel):
                 "username", "email", "phone", "domain", "name", "url", "ip_address"
             }
         )
-        return resolve_query(self.subject, hint=self.subject_type, **values)
+        return resolve_query(
+            self.subject,
+            hint=self.subject_type,
+            default_phone_region=SETTINGS.phone_default_region,
+            **values,
+        )
 
 
 class KeyPayload(BaseModel):
@@ -180,7 +185,12 @@ def _resolve_query_or_422(
         if value is not None and len(value) > _IDENTIFIER_MAX:
             raise HTTPException(status_code=422, detail="identifier is too long")
     try:
-        return resolve_query(subject, hint=subject_type, **values)
+        return resolve_query(
+            subject,
+            hint=subject_type,
+            default_phone_region=SETTINGS.phone_default_region,
+            **values,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -856,7 +866,24 @@ async def api_run_observations(request: Request, run_id: int) -> JSONResponse:
                     **_row(
                         observation,
                         ("id", "source", "category", "label", "url", "verdict",
-                         "confidence", "reliability", "reasons"),
+                         "confidence", "reliability", "reasons", "collector", "origin",
+                         "evidence_class", "independence_key", "claim_key", "completeness",
+                         "temporal_status"),
+                    ),
+                    "extractions": observation.extractions or [],
+                    "confidence_dimensions": observation.confidence_dimensions,
+                    "policy": observation.policy or {},
+                    "observed_at": (
+                        observation.observed_at.isoformat()
+                        if observation.observed_at else None
+                    ),
+                    "first_seen_at": (
+                        observation.first_seen_at.isoformat()
+                        if observation.first_seen_at else None
+                    ),
+                    "last_seen_at": (
+                        observation.last_seen_at.isoformat()
+                        if observation.last_seen_at else None
                     ),
                     "review": (
                         {
@@ -867,6 +894,27 @@ async def api_run_observations(request: Request, run_id: int) -> JSONResponse:
                     ),
                 }
                 for observation in observations
+            ],
+        })
+
+
+@app.get("/api/runs/{run_id}/contradictions")
+async def api_run_contradictions(request: Request, run_id: int) -> JSONResponse:
+    with get_db().session() as session:
+        _can_access_run(session, _principal(request), run_id)
+        rows = repo.contradictions_for_run(session, run_id)
+        return JSONResponse({
+            "run_id": run_id,
+            "contradictions": [
+                {
+                    **_row(
+                        row,
+                        ("id", "claim_key", "earlier_observation_id",
+                         "later_observation_id", "kind", "severity", "reasons"),
+                    ),
+                    "created_at": row.created_at.isoformat(),
+                }
+                for row in rows
             ],
         })
 
@@ -1113,6 +1161,7 @@ async def api_sources() -> JSONResponse:
 @app.get("/api/modules")
 async def api_modules() -> JSONResponse:
     from .sources import CONTRACTS
+    from .adapters.maigret import compatibility as maigret_compatibility
 
     return JSONResponse([
         {
@@ -1129,8 +1178,14 @@ async def api_modules() -> JSONResponse:
                 and VAULT.has_all(module.requires_keys)
             ),
             "expansion": module.expansion,
+            "capabilities": module.declared_capabilities,
+            "evidence_policy": module.evidence_policy.model_dump(mode="json"),
             "gated": module.expansion and not SETTINGS.expansion_requested,
             "contract": CONTRACTS[module.name].as_dict(),
+            "compatibility": (
+                maigret_compatibility(SETTINGS.maigret_executable).as_dict()
+                if module.name == "maigret" else None
+            ),
         }
         for module in MODULES
     ])

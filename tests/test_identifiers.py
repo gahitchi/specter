@@ -51,6 +51,14 @@ def test_explicit_hint_validates_instead_of_forcing_a_type() -> None:
     assert classify_input("single token", hint="name").kind == "name"
 
 
+def test_configured_region_enables_national_phone_intake() -> None:
+    result = classify_input("06 6982", hint="phone", default_phone_region="IT")
+
+    assert result.kind == "phone"
+    assert result.normalized == "+39066982"
+    assert "configured IT region" in result.reasons[0]
+
+
 def test_resolution_merges_additional_known_fields_and_rejects_conflicts() -> None:
     query, intake = resolve_query("alice@example.com", name="Alice Example")
 

@@ -12,6 +12,13 @@ from sqlalchemy import cast, delete, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
+from ..evidence import (
+    TemporalStatus,
+    default_dimensions,
+    evidence_claim_key,
+    infer_origin,
+    utc_now,
+)
 from ..models import Finding, Query
 from . import models_db as m
 
@@ -105,6 +112,39 @@ def list_runs(s: Session, target_id: int | None = None, limit: int = 50,
 
 def add_observation(s: Session, run: m.Run, finding: Finding,
                     reliability: float = 0.5) -> m.Observation:
+    origin = finding.origin or infer_origin(finding.source, finding.url)
+    claim_key = evidence_claim_key(
+        finding.category, finding.url, finding.label, finding.signals
+    )
+    observed_at = finding.temporal.observed_at or utc_now()
+    complete = finding.completeness
+    dimensions = finding.confidence_dimensions or default_dimensions(
+        finding.confidence,
+        reliability,
+        complete,
+        finding.extractions,
+    )
+    prior = s.execute(
+        select(m.Observation)
+        .where(
+            m.Observation.target_id == run.target_id,
+            m.Observation.claim_key == claim_key,
+        )
+        .order_by(m.Observation.observed_at.desc(), m.Observation.id.desc())
+    ).scalars().first()
+    first_seen = (
+        prior.first_seen_at or prior.observed_at or prior.created_at
+        if prior is not None else observed_at
+    )
+    temporal_status = (
+        finding.temporal.status
+        if finding.temporal.status != TemporalStatus.UNKNOWN
+        else (
+            TemporalStatus.CURRENT
+            if finding.verdict.value in {"FOUND", "NOT_FOUND"}
+            else TemporalStatus.UNKNOWN
+        )
+    )
     obs = m.Observation(
         run_id=run.id,
         target_id=run.target_id,
@@ -121,9 +161,56 @@ def add_observation(s: Session, run: m.Run, finding: Finding,
         data=dict(finding.data),
         fingerprint=str(finding.data.get("fingerprint") or "") or None,
         reliability=reliability,
+        collector=origin.collector,
+        origin=origin.origin,
+        evidence_class=origin.evidence_class.value,
+        independence_key=origin.independence_key,
+        claim_key=claim_key,
+        extractions=[item.model_dump(mode="json") for item in finding.extractions],
+        confidence_dimensions=dimensions.model_dump(mode="json"),
+        policy=finding.policy.model_dump(mode="json"),
+        completeness=complete.value,
+        temporal_status=temporal_status.value,
+        observed_at=observed_at,
+        valid_from=finding.temporal.valid_from,
+        valid_until=finding.temporal.valid_until,
+        first_seen_at=finding.temporal.first_seen_at or first_seen,
+        last_seen_at=finding.temporal.last_seen_at or observed_at,
     )
     s.add(obs)
+    s.flush()
+    _record_temporal_transition(s, run, prior, obs)
     return obs
+
+
+def _record_temporal_transition(
+    s: Session,
+    run: m.Run,
+    prior: m.Observation | None,
+    current: m.Observation,
+) -> None:
+    if prior is None:
+        return
+    comparable = {"FOUND", "NOT_FOUND"}
+    if prior.verdict not in comparable or current.verdict not in comparable:
+        return
+    prior.temporal_status = TemporalStatus.HISTORICAL.value
+    if prior.verdict == current.verdict:
+        return
+    s.add(m.ObservationContradiction(
+        run_id=run.id,
+        target_id=run.target_id,
+        claim_key=current.claim_key,
+        earlier_observation_id=prior.id,
+        later_observation_id=current.id,
+        kind="presence-changed",
+        severity="medium",
+        reasons=[
+            f"The claim changed from {prior.verdict} to {current.verdict}.",
+            "Treat the earlier observation as historical; source changes and collection gaps "
+            "can also explain this transition.",
+        ],
+    ))
 
 
 def observations_for_run(s: Session, run_id: int, hits_only: bool = False) -> list[m.Observation]:
@@ -138,6 +225,24 @@ def observations_for_target(s: Session, target_id: int, hits_only: bool = True) 
     if hits_only:
         stmt = stmt.where(m.Observation.verdict == "FOUND")
     return list(s.execute(stmt.order_by(m.Observation.id)).scalars().all())
+
+
+def contradictions_for_run(s: Session, run_id: int) -> list[m.ObservationContradiction]:
+    return list(s.execute(
+        select(m.ObservationContradiction)
+        .where(m.ObservationContradiction.run_id == run_id)
+        .order_by(m.ObservationContradiction.id)
+    ).scalars().all())
+
+
+def contradictions_for_target(
+    s: Session, target_id: int
+) -> list[m.ObservationContradiction]:
+    return list(s.execute(
+        select(m.ObservationContradiction)
+        .where(m.ObservationContradiction.target_id == target_id)
+        .order_by(m.ObservationContradiction.id)
+    ).scalars().all())
 
 
 # --- Change events ---------------------------------------------------------
@@ -292,7 +397,13 @@ def persist_graph(s: Session, run: m.Run, artifacts: list, edges: list) -> None:
         node = m.ArtifactNode(
             run_id=run.id, target_id=run.target_id, type=a.type.value,
             value=a.value, normalized=a.normalized, depth=a.depth,
-            source_module=a.source_module, confidence=a.confidence, data=dict(a.data),
+            source_module=a.source_module,
+            confidence=a.confidence,
+            data={
+                **dict(a.data),
+                "evidence_policy": a.policy.model_dump(mode="json"),
+                "origin": a.origin.model_dump(mode="json") if a.origin else None,
+            },
         )
         s.add(node)
         s.flush()

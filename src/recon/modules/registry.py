@@ -22,9 +22,11 @@ from . import (
     gitlab,
     hackernews,
     ip_geo,
+    maigret,
     name,
     permute,
     phone,
+    phone_web,
     profile_links,
     resolve,
     ripestat,
@@ -39,8 +41,10 @@ from .base import Module
 MODULES: list[Module] = [
     # Phase 1 — core collectors + recursive engine
     username.MODULE,
+    maigret.MODULE,
     email.MODULE,
     phone.MODULE,
+    phone_web.MODULE,
     name.MODULE,
     domain.MODULE,
     resolve.MODULE,

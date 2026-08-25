@@ -21,6 +21,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from . import normalize
+from .evidence import EvidenceOrigin, EvidencePolicy
 
 
 class ArtifactType(str, enum.Enum):
@@ -82,6 +83,8 @@ class Artifact(BaseModel):
     source_module: str = "seed"  # module that produced this artifact
     parent_key: Optional[str] = None  # key of the artifact that led here
     confidence: float = 1.0
+    origin: EvidenceOrigin | None = None
+    policy: EvidencePolicy = Field(default_factory=EvidencePolicy)
     data: dict[str, Any] = Field(default_factory=dict)
 
     def model_post_init(self, _ctx: Any) -> None:
@@ -96,6 +99,8 @@ class Artifact(BaseModel):
     @classmethod
     def make(cls, atype: ArtifactType, value: str, *, parent: "Artifact | None" = None,
              source_module: str = "seed", confidence: float = 1.0,
+             origin: EvidenceOrigin | None = None,
+             policy: EvidencePolicy | None = None,
              **data: Any) -> "Artifact":
         """Convenience constructor that wires depth + provenance from a parent."""
         return cls(
@@ -105,5 +110,7 @@ class Artifact(BaseModel):
             source_module=source_module,
             parent_key=parent.key if parent is not None else None,
             confidence=confidence,
+            origin=origin,
+            policy=policy or EvidencePolicy(),
             data=data,
         )

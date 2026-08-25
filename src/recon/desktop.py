@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
+from .adapters.maigret import compatibility as maigret_compatibility
 from .desktop_settings import (
     DesktopSettings,
     data_root,
@@ -173,6 +174,18 @@ class SettingsDialog(QDialog):
         self.close_to_tray.setChecked(settings.close_to_tray)
         self.background_services = QCheckBox("Start research worker and monitor with Specter")
         self.background_services.setChecked(settings.background_services)
+        self.maigret = QCheckBox("Use Maigret for additional username candidates")
+        self.maigret.setChecked(settings.maigret_enabled)
+        adapter = maigret_compatibility(os.environ.get("RECON_MAIGRET_EXECUTABLE"))
+        if not adapter.available:
+            self.maigret.setChecked(False)
+            self.maigret.setEnabled(False)
+            self.maigret.setText("Maigret username candidates (not installed)")
+        elif adapter.compatible is False:
+            self.maigret.setChecked(False)
+            self.maigret.setEnabled(False)
+            self.maigret.setText(f"Maigret {adapter.version} (unsupported version)")
+        self.maigret.setToolTip(adapter.detail)
         self.zoom = QSpinBox()
         self.zoom.setRange(75, 175)
         self.zoom.setSingleStep(5)
@@ -184,6 +197,10 @@ class SettingsDialog(QDialog):
         general_layout.addWidget(self.notifications)
         general_layout.addWidget(self.close_to_tray)
         general_layout.addWidget(self.background_services)
+
+        research = QGroupBox("Research sources")
+        research_layout = QVBoxLayout(research)
+        research_layout.addWidget(self.maigret)
 
         appearance = QGroupBox("Workspace")
         appearance_layout = QFormLayout(appearance)
@@ -201,6 +218,7 @@ class SettingsDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(general)
+        layout.addWidget(research)
         layout.addWidget(appearance)
         layout.addWidget(updates)
         layout.addWidget(buttons)
@@ -211,6 +229,7 @@ class SettingsDialog(QDialog):
             notifications=self.notifications.isChecked(),
             close_to_tray=self.close_to_tray.isChecked(),
             background_services=self.background_services.isChecked(),
+            maigret_enabled=self.maigret.isChecked(),
             zoom_percent=self.zoom.value(),
             window_width=self._settings.window_width,
             window_height=self._settings.window_height,
@@ -768,11 +787,13 @@ class SpecterWindow(QMainWindow):
         dialog.exec()
 
     def _save_settings(self, settings: DesktopSettings) -> None:
+        source_changed = settings.maigret_enabled != self._settings.maigret_enabled
         self._settings = settings
         self.view.setZoomFactor(settings.zoom_percent / 100)
         save_desktop_settings(settings)
         self._configure_update_monitor()
-        self.statusBar().showMessage("Settings saved", 3000)
+        message = "Restart Specter to apply source changes" if source_changed else "Settings saved"
+        self.statusBar().showMessage(message, 5000 if source_changed else 3000)
 
     def _settings_with_geometry(self) -> DesktopSettings:
         size = self.normalGeometry().size() if self.isMaximized() else self.size()

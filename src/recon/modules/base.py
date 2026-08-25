@@ -15,6 +15,15 @@ from typing import Any, Awaitable, Callable
 from ..activity import ActivityCallback, artifact_activity_id, safe_display_url
 from ..config import Settings
 from ..connectors import cache
+from ..evidence import (
+    Completeness,
+    EvidencePolicy,
+    TemporalEvidence,
+    TemporalStatus,
+    default_dimensions,
+    infer_origin,
+    utc_now,
+)
 from ..graph_models import Artifact, ArtifactType
 from ..http_client import RateLimitedClient, RequestBudgetExceeded
 from ..keys import redact
@@ -67,19 +76,22 @@ class ModuleContext:
         if self.activity_metrics is not None:
             self.activity_metrics["artifacts"] = self.activity_metrics.get("artifacts", 0) + 1
         if self._emit_activity is not None:
+            promotion = a.data.get("promotion") or {}
             await self._emit_activity({
                 "kind": "artifact",
                 "id": artifact_activity_id(a.key),
                 "parent_id": self.activity_parent_id,
                 "phase": "discovered",
                 "status": "finished",
-                "outcome": "success",
+                "outcome": "success" if promotion.get("allowed", True) else "uncertain",
                 "artifact_type": a.type.value,
                 "label": a.value,
                 "module": a.source_module,
                 "confidence": a.confidence,
                 "depth": a.depth,
                 "in_scope": self.in_scope(a),
+                "promotion_status": promotion.get("status", "eligible"),
+                "promotion_reasons": promotion.get("reasons", []),
             })
         return True
 
@@ -122,11 +134,24 @@ class Module:
     use_cache: bool = True
     enabled: bool = True
     expansion: bool = False
+    capabilities: set[str] = field(default_factory=set)
+    evidence_policy: EvidencePolicy = field(default_factory=EvidencePolicy)
 
     @property
     def kind_label(self) -> str:
         """A stable 'kind' for the Source/breaker row (first consumed type)."""
         return next((t.value for t in sorted(self.consumes, key=lambda x: x.value)), "module")
+
+    @property
+    def declared_capabilities(self) -> list[str]:
+        declared = set(self.capabilities)
+        declared.update(f"consume:{kind.value}" for kind in self.consumes)
+        declared.update(f"produce:{kind.value}" for kind in self.produces)
+        if self.passive:
+            declared.add("passive-collection")
+        if self.evidence_policy.candidate_only:
+            declared.add("candidate-discovery")
+        return sorted(declared)
 
     def accepts(self, art: Artifact, *, expansion_enabled: bool = False) -> bool:
         return (
@@ -143,14 +168,40 @@ class Module:
         )
         ckey = f"{self.name}:{art.key}"
 
+        def enrich_finding(f: Finding) -> Finding:
+            if f.origin is None:
+                f.origin = infer_origin(f.source, f.url, collector=self.name)
+            if f.temporal.observed_at is None:
+                f.temporal = TemporalEvidence(
+                    observed_at=utc_now(),
+                    status=(
+                        TemporalStatus.CURRENT
+                        if f.verdict in {Verdict.FOUND, Verdict.NOT_FOUND}
+                        else TemporalStatus.UNKNOWN
+                    ),
+                )
+            if f.completeness == Completeness.UNKNOWN:
+                f.completeness = (
+                    Completeness.COMPLETE
+                    if f.verdict in {Verdict.FOUND, Verdict.NOT_FOUND}
+                    else Completeness.PARTIAL
+                )
+            if self.evidence_policy.candidate_only:
+                f.policy = self.evidence_policy.model_copy(deep=True)
+            if f.confidence_dimensions is None:
+                f.confidence_dimensions = default_dimensions(
+                    f.confidence, rel, f.completeness, f.extractions
+                )
+            f.data = {**f.data, "source_reliability": rel}
+            return f
+
         # 1) Cache: replay prior findings + artifacts instead of hitting sources.
         if self.use_cache:
             cached = await asyncio.to_thread(cache.get_cached_key, ckey)
             if cached is not None:
                 for fd in cached.get("findings", []):
-                    f = Finding(**fd)
+                    f = enrich_finding(Finding(**fd))
                     f.reasons = [*f.reasons, "(from cache)"]
-                    f.data = {**f.data, "source_reliability": rel}
                     await ctx.emit_finding(f)
                 for ad in cached.get("artifacts", []):
                     await ctx.emit_artifact(Artifact(**ad))
@@ -159,11 +210,11 @@ class Module:
         # 2) Circuit breaker: skip dead sources during cooldown.
         if await asyncio.to_thread(cache.breaker_open, self.name, self.kind_label,
                                    self.reliability_prior):
-            await ctx.emit_finding(Finding(
+            await ctx.emit_finding(enrich_finding(Finding(
                 source=self.name, category=self.kind_label, label=self.name,
                 verdict=Verdict.ERROR, confidence=0.0,
                 reasons=["source circuit-breaker open (skipped, will retry later)"],
-            ))
+            )))
             return
 
         # 3) Run the module, buffering output so we can cache it.
@@ -171,7 +222,7 @@ class Module:
         buf_a: list[Artifact] = []
 
         async def capture_finding(f: Finding) -> None:
-            f.data = {**f.data, "source_reliability": rel}
+            f = enrich_finding(f)
             buf_f.append(f)
             await ctx.emit_finding(f)
 
@@ -188,10 +239,10 @@ class Module:
             error = redact(str(e))
             await asyncio.to_thread(cache.record_failure, self.name, self.kind_label,
                                     self.reliability_prior, error)
-            await ctx.emit_finding(Finding(
+            await ctx.emit_finding(enrich_finding(Finding(
                 source=self.name, category=self.kind_label, label=self.name,
                 verdict=Verdict.ERROR, reasons=[f"module failed: {error}"],
-            ))
+            )))
             return
 
         # 4) Health bookkeeping: an all-ERROR result counts as a failure.

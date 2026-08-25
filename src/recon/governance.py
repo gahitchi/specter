@@ -192,6 +192,14 @@ def purge_target(
         session, m.AuditEvent, or_(*audit_conditions)
     )
     if observation_ids:
+        counts["contradictions"] = _delete_count(
+            session,
+            m.ObservationContradiction,
+            or_(
+                m.ObservationContradiction.earlier_observation_id.in_(observation_ids),
+                m.ObservationContradiction.later_observation_id.in_(observation_ids),
+            ),
+        )
         counts["pair_reviews"] = _delete_count(
             session, m.EntityPairReview,
             or_(
@@ -329,6 +337,11 @@ def target_export(session, target_id: int, *, redacted: bool = False) -> dict:
         .order_by(m.Observation.id)
     ).scalars())
     reviews = review_history(session, target_id=target_id, limit=100_000)
+    contradictions = list(session.execute(
+        select(m.ObservationContradiction)
+        .where(m.ObservationContradiction.target_id == target_id)
+        .order_by(m.ObservationContradiction.id)
+    ).scalars())
 
     exported_observations = []
     for observation in observations:
@@ -340,6 +353,21 @@ def target_export(session, target_id: int, *, redacted: bool = False) -> dict:
             "verdict": observation.verdict,
             "confidence": observation.confidence,
             "reliability": observation.reliability,
+            "collector": observation.collector,
+            "origin": observation.origin,
+            "evidence_class": observation.evidence_class,
+            "independence_key": observation.independence_key,
+            "temporal_status": observation.temporal_status,
+            "observed_at": (
+                observation.observed_at.isoformat() if observation.observed_at else None
+            ),
+            "first_seen_at": (
+                observation.first_seen_at.isoformat() if observation.first_seen_at else None
+            ),
+            "last_seen_at": (
+                observation.last_seen_at.isoformat() if observation.last_seen_at else None
+            ),
+            "completeness": observation.completeness,
             "created_at": observation.created_at.isoformat(),
         }
         if not redacted:
@@ -351,11 +379,15 @@ def target_export(session, target_id: int, *, redacted: bool = False) -> dict:
                 "trace": observation.trace,
                 "signals": observation.signals,
                 "data": observation.data,
+                "claim_key": observation.claim_key,
+                "extractions": observation.extractions,
+                "confidence_dimensions": observation.confidence_dimensions,
+                "policy": observation.policy,
             })
         exported_observations.append(row)
 
     return {
-        "format": "osint-recon-target-export-v1",
+        "format": "specter-target-export-v2",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "redacted": redacted,
         "target": {
@@ -386,5 +418,18 @@ def target_export(session, target_id: int, *, redacted: bool = False) -> dict:
                 "created_at": review.created_at.isoformat(),
             }
             for review in reviews
+        ],
+        "contradictions": [
+            {
+                "id": item.id,
+                "claim_key": "[REDACTED]" if redacted else item.claim_key,
+                "earlier_observation_id": item.earlier_observation_id,
+                "later_observation_id": item.later_observation_id,
+                "kind": item.kind,
+                "severity": item.severity,
+                "reasons": item.reasons,
+                "created_at": item.created_at.isoformat(),
+            }
+            for item in contradictions
         ],
     }

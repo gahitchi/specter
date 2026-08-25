@@ -4,8 +4,11 @@ of the false-positive engine — tune them in one place."""
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import phonenumbers
 
 from . import __version__
 from .desktop_settings import data_root
@@ -108,6 +111,35 @@ class Settings:
         "phone",
         "domain",
         "name",
+    )
+
+    # --- Phone research ---
+    # National-format numbers are ambiguous without an operator-supplied ISO
+    # region. Web discovery stays deliberately small and sequential.
+    phone_default_region: str | None = field(
+        default_factory=lambda: (
+            os.environ.get("RECON_PHONE_DEFAULT_REGION", "").strip().upper() or None
+        )
+    )
+    phone_web_enabled: bool = field(
+        default_factory=lambda: _env_bool("RECON_PHONE_WEB_ENABLED", True)
+    )
+    phone_web_max_queries: int = field(
+        default_factory=lambda: int(os.environ.get("RECON_PHONE_WEB_MAX_QUERIES", "2"))
+    )
+    phone_web_max_pages: int = field(
+        default_factory=lambda: int(os.environ.get("RECON_PHONE_WEB_MAX_PAGES", "6"))
+    )
+
+    # Optional external username candidate discovery. The adapter has separate,
+    # hard-coded process/network ceilings and is intentionally off by default.
+    maigret_enabled: bool = field(
+        default_factory=lambda: _env_bool("RECON_MAIGRET_ENABLED", False)
+    )
+    maigret_executable: str | None = field(
+        default_factory=lambda: (
+            os.environ.get("RECON_MAIGRET_EXECUTABLE", "").strip() or None
+        )
     )
 
     # Sites/categories excluded by default (auth-walled / ToS-restricted).
@@ -245,6 +277,8 @@ class Settings:
             "max_body_bytes": self.max_body_bytes,
             "max_artifacts": self.max_artifacts,
             "max_requests": self.max_requests,
+            "phone_web_max_queries": self.phone_web_max_queries,
+            "phone_web_max_pages": self.phone_web_max_pages,
             "job_lease_seconds": self.job_lease_seconds,
             "job_max_attempts": self.job_max_attempts,
             "job_retention_days": self.job_retention_days,
@@ -258,6 +292,17 @@ class Settings:
         invalid = [name for name, value in positive.items() if value <= 0]
         if invalid:
             raise ValueError(f"settings must be positive: {', '.join(invalid)}")
+        if self.phone_default_region and (
+            not re.fullmatch(r"[A-Z]{2}", self.phone_default_region)
+            or self.phone_default_region not in phonenumbers.SUPPORTED_REGIONS
+        ):
+            raise ValueError("RECON_PHONE_DEFAULT_REGION must be a supported ISO country code")
+        if self.phone_web_max_queries > 2 or self.phone_web_max_pages > 6:
+            raise ValueError("phone web research is capped at 2 queries and 6 pages")
+        if self.maigret_executable and (
+            "\x00" in self.maigret_executable or len(self.maigret_executable) > 2048
+        ):
+            raise ValueError("RECON_MAIGRET_EXECUTABLE is invalid")
         if self.max_depth < 0 or self.per_host_min_interval < 0:
             raise ValueError("max_depth and per_host_min_interval cannot be negative")
         for name in ("baseline_similarity_reject", "found_confidence",
