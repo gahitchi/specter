@@ -462,3 +462,29 @@ def list_calibration(s: Session, limit: int = 20) -> list[m.CalibrationRun]:
     return list(s.execute(
         select(m.CalibrationRun).order_by(m.CalibrationRun.id.desc()).limit(limit)
     ).scalars().all())
+
+
+def save_evaluation(s: Session, report: dict) -> m.EvaluationRun:
+    dataset = report.get("dataset") or {}
+    metrics = report.get("metrics") or {}
+    gate = report.get("gate") or {}
+    row = m.EvaluationRun(
+        dataset_name=dataset.get("name", "evaluation"),
+        dataset_sha256=dataset.get("sha256", ""),
+        provenance=dataset.get("provenance", "unknown"),
+        cases=len(report.get("cases") or []),
+        claims=metrics.get("claims", 0),
+        precision=metrics.get("precision", 0.0),
+        recall=metrics.get("recall", 0.0),
+        gate_status=gate.get("status", "NEEDS_EVIDENCE"),
+        report=report,
+    )
+    s.add(row)
+    s.flush()
+    return row
+
+
+def list_evaluations(s: Session, limit: int = 20) -> list[m.EvaluationRun]:
+    return list(s.execute(
+        select(m.EvaluationRun).order_by(m.EvaluationRun.id.desc()).limit(limit)
+    ).scalars().all())

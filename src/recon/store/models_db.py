@@ -223,6 +223,24 @@ class SourceHealthCheck(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class EvaluationRun(Base):
+    """Immutable result from one replayable quality evaluation."""
+
+    __tablename__ = "evaluation_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_name: Mapped[str] = mapped_column(String(160), index=True)
+    dataset_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    provenance: Mapped[str] = mapped_column(String(40), index=True)
+    cases: Mapped[int] = mapped_column(Integer, default=0)
+    claims: Mapped[int] = mapped_column(Integer, default=0)
+    precision: Mapped[float] = mapped_column(Float, default=0.0)
+    recall: Mapped[float] = mapped_column(Float, default=0.0)
+    gate_status: Mapped[str] = mapped_column(String(30), index=True)
+    report: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class AuditEvent(Base):
     """Security-conscious local audit trail for human and governance actions."""
 

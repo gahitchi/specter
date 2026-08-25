@@ -1782,6 +1782,133 @@ tr.NOT_FOUND {
   font-size: 10px;
 }
 
+.phone-dossier {
+  margin-top: 24px;
+}
+
+.phone-dossier-head,
+.phone-mention > div,
+.stop-decision,
+.readiness-state,
+.readiness-metrics,
+.expected-value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.phone-dossier-head h3,
+.phone-dossier h4 {
+  margin: 2px 0 8px;
+  font-size: 12px;
+}
+
+.phone-lifecycle {
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 4px 7px;
+  color: var(--muted-strong);
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.phone-lifecycle.state-possible_reuse,
+.phone-lifecycle.state-historical_mentions {
+  border-color: rgba(228, 180, 89, 0.45);
+  color: var(--uncertain);
+}
+
+.phone-mentions {
+  margin-top: 18px;
+}
+
+.phone-mention {
+  border-top: 1px solid var(--line);
+  padding: 9px 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.phone-mention p {
+  margin: 5px 0 0;
+  color: var(--muted-strong);
+  line-height: 1.45;
+}
+
+.expected-value {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.expected-value b {
+  color: var(--muted-strong);
+}
+
+.stop-decision {
+  margin-top: 20px;
+  border-left: 2px solid var(--blue);
+  padding: 12px 14px;
+  background: var(--surface-soft);
+}
+
+.stop-decision.terminal {
+  border-color: var(--found);
+}
+
+.stop-decision h4,
+.stop-decision p {
+  margin: 2px 0 0;
+}
+
+.stop-decision p,
+.stop-decision > span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.readiness-state {
+  align-items: flex-start;
+  border-left: 2px solid var(--uncertain);
+  padding: 12px 14px;
+  background: var(--surface-soft);
+}
+
+.readiness-state.ready {
+  border-color: var(--found);
+}
+
+.readiness-state > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.readiness-state strong {
+  color: var(--muted-strong);
+}
+
+.readiness-metrics {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.readiness-metrics span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.readiness-metrics b {
+  color: var(--text);
+}
+
+.readiness-reasons {
+  margin-top: 10px;
+}
+
 .reasoning-region {
   margin-top: 24px;
 }

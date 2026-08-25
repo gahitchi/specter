@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
@@ -11,6 +15,26 @@ from recon.updater import AvailableBuild, UpdateStatus
 
 
 def main() -> None:
+    with TemporaryDirectory(prefix="specter-desktop-smoke-") as temporary:
+        root = Path(temporary)
+        overrides = {
+            "SPECTER_CONFIG_DIR": str(root / "config"),
+            "SPECTER_DATA_DIR": str(root / "data"),
+            "SPECTER_STATE_DIR": str(root / "state"),
+        }
+        previous = {name: os.environ.get(name) for name in overrides}
+        try:
+            os.environ.update(overrides)
+            _run_smoke(root)
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+
+def _run_smoke(root: Path) -> None:
     app = QApplication.instance() or QApplication([])
     settings = DesktopSettings(
         check_for_updates=False,
@@ -86,6 +110,8 @@ def main() -> None:
     window.shutdown()
     if notifications != [("Bridge", "ready", "info")]:
         raise RuntimeError(f"native notification bridge failed: {notifications}")
+    if not (root / "config" / "settings.json").is_file():
+        raise RuntimeError("desktop settings were not persisted")
 
 
 if __name__ == "__main__":

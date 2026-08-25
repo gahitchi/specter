@@ -452,6 +452,18 @@ def test_launcher_routes_research_commands_to_specter_cli(monkeypatch):
     assert received == [["scan", "torvalds"]]
 
 
+def test_launcher_routes_quality_and_diagnostic_commands_to_specter_cli(monkeypatch):
+    from recon import cli, launch
+
+    received: list[list[str]] = []
+    monkeypatch.setattr(cli, "main", received.append)
+
+    launch.main(["evaluate", "--json"])
+    launch.main(["diagnostics", "--json"])
+
+    assert received == [["evaluate", "--json"], ["diagnostics", "--json"]]
+
+
 def test_launcher_exposes_the_platform_icon_path(capsys):
     from recon import launch
 

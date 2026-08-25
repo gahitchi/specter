@@ -84,6 +84,7 @@ jobs:
       - run: uv build --clear --no-create-gitignore
       - run: uv run twine check dist/*.whl dist/*.tar.gz
       - run: uv run python scripts/release_check.py --dist-dir dist
+      - run: uv run python scripts/operational_drill.py
       - name: Verify wheel assets
         run: >-
           uv run python -c "import glob, zipfile;
@@ -92,7 +93,7 @@ jobs:
           names=set(archive.namelist());
           entry_name=next(name for name in names if name.endswith('.dist-info/entry_points.txt'));
           entry_points=archive.read(entry_name).decode();
-          required={'recon/desktop.py','recon/desktop_settings.py','recon/evidence.py','recon/adapters/base.py','recon/adapters/conformance.py','recon/adapters/maigret.py','recon/assets/specter.ico','recon/assets/specter.png','recon/updater.py','recon/web/index.html','recon/web/app.js','recon/web/style.css','recon/data/sites.json','recon/data/calibration_labels.json','recon/migrations/versions/20260813_0001_maturity_schema.py','recon/migrations/versions/20260814_0004_job_activity.py','recon/migrations/versions/20260825_0005_evidence_model_v2.py'};
+          required={'recon/desktop.py','recon/desktop_settings.py','recon/diagnostics.py','recon/evaluation.py','recon/phone_intel.py','recon/evidence.py','recon/adapters/base.py','recon/adapters/conformance.py','recon/adapters/maigret.py','recon/assets/specter.ico','recon/assets/specter.png','recon/updater.py','recon/web/index.html','recon/web/app.js','recon/web/style.css','recon/data/sites.json','recon/data/calibration_labels.json','recon/data/evaluation_cases.json','recon/migrations/versions/20260813_0001_maturity_schema.py','recon/migrations/versions/20260814_0004_job_activity.py','recon/migrations/versions/20260825_0005_evidence_model_v2.py','recon/migrations/versions/20260825_0006_evaluation_runs.py'};
           assert required <= names, required-names;
           assert 'specter-app = recon.launch:main' in entry_points"
       - name: Validate operator scripts

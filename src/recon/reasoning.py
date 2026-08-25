@@ -30,10 +30,20 @@ class NextAction(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     requires: list[str] = Field(default_factory=list)
     inputs: list[str] = Field(default_factory=list)
+    expected_value: dict[str, float] = Field(default_factory=dict)
+
+
+class StopDecision(BaseModel):
+    code: str
+    stop: bool
+    terminal: bool
+    rationale: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    triggers: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReasoningReport(BaseModel):
-    version: int = 1
+    version: int = 2
     objective: str
     assessment: str
     confidence: float = Field(ge=0.0, le=1.0)
@@ -41,6 +51,7 @@ class ReasoningReport(BaseModel):
     uncertainties: list[str] = Field(default_factory=list)
     next_actions: list[NextAction] = Field(default_factory=list)
     decisions: list[dict[str, Any]] = Field(default_factory=list)
+    stop_decision: StopDecision
     guardrails: list[str] = Field(default_factory=list)
 
 
@@ -60,7 +71,7 @@ _TYPE_VALUE = {
     ArtifactType.ASN: 28,
     ArtifactType.BREACH: 25,
     ArtifactType.HASH: 20,
-    ArtifactType.PHONE: 15,
+    ArtifactType.PHONE: 95,
     ArtifactType.NAME: 10,
 }
 _IDENTITY_OUTPUTS = {
@@ -90,6 +101,7 @@ class InvestigationReasoner:
 
     def __init__(self) -> None:
         self.decisions: list[dict[str, Any]] = []
+        self.low_yield_waves = 0
 
     @staticmethod
     def _dispatch_score(
@@ -98,32 +110,61 @@ class InvestigationReasoner:
         *,
         seen_types: set[ArtifactType],
         findings: list[Finding],
-    ) -> tuple[float, list[str]]:
+    ) -> tuple[float, dict[str, float], list[str]]:
         found = sum(finding.verdict == Verdict.FOUND for finding in findings)
-        base = float(_TYPE_VALUE.get(artifact.type, 0))
-        reliability = float(module.reliability_prior) * 12.0
-        output_value = max((_TYPE_VALUE.get(kind, 0) for kind in module.produces), default=0)
-        novelty = 12.0 if module.produces - seen_types else 0.0
-        identity_gain = 10.0 if found and module.produces & _IDENTITY_OUTPUTS else 0.0
-        seed_verification = 8.0 if not found and artifact.depth == 0 else 0.0
+        base = float(_TYPE_VALUE.get(artifact.type, 0)) / 100.0
+        reliability = float(module.reliability_prior)
+        output_value = max(
+            (_TYPE_VALUE.get(kind, 0) for kind in module.produces), default=0
+        ) / 100.0
+        novelty = 1.0 if module.produces - seen_types else 0.0
+        identity_gain = 1.0 if found and module.produces & _IDENTITY_OUTPUTS else 0.0
+        seed_verification = 1.0 if not found and artifact.depth == 0 else 0.0
         policy = getattr(module, "evidence_policy", None)
-        trust_cost = 14.0 if policy is not None and policy.candidate_only else 0.0
-        depth_cost = artifact.depth * 2.0
-        score = (
-            base + reliability + output_value * 0.2 + novelty + identity_gain
-            + seed_verification + artifact.confidence * 5.0 - depth_cost - trust_cost
+        candidate_only = bool(policy is not None and policy.candidate_only)
+        request_cost = max(1, int(getattr(module, "estimated_request_cost", 1)))
+        active_risk = 0.35 if not getattr(module, "passive", True) else 0.0
+        depth_risk = min(0.3, artifact.depth * 0.08)
+        policy_risk = 0.25 if candidate_only else 0.0
+        information_gain = min(
+            1.0,
+            0.25 * base
+            + 0.25 * output_value
+            + 0.2 * novelty
+            + 0.15 * identity_gain
+            + 0.15 * seed_verification,
         )
-        reasons = [f"{artifact.type.value} lead value {base:.0f}"]
+        evidence_quality = min(1.0, 0.7 * reliability + 0.3 * artifact.confidence)
+        cost = min(1.0, request_cost / 6.0)
+        risk = min(1.0, active_risk + depth_risk + policy_risk)
+        utility = (
+            0.52 * information_gain
+            + 0.34 * evidence_quality
+            + 0.08 * novelty
+            - 0.04 * cost
+            - 0.18 * risk
+        )
+        dimensions = {
+            "information_gain": round(information_gain, 3),
+            "evidence_quality": round(evidence_quality, 3),
+            "novelty": round(novelty, 3),
+            "cost": round(cost, 3),
+            "risk": round(risk, 3),
+            "utility": round(utility, 3),
+        }
+        reasons = [f"{artifact.type.value} can reduce a material evidence gap"]
         if novelty:
             reasons.append("may add a new evidence type")
         if identity_gain:
             reasons.append("can corroborate identity-bearing evidence")
         if seed_verification:
             reasons.append("directly tests a supplied identifier")
-        if trust_cost:
+        if candidate_only:
             reasons.append("candidate-only output cannot pivot automatically")
-        reasons.append(f"source prior {module.reliability_prior:.2f}")
-        return round(score, 2), reasons
+        if request_cost > 1:
+            reasons.append(f"estimated request cost {request_cost}")
+        reasons.append(f"source quality prior {module.reliability_prior:.2f}")
+        return round(utility, 3), dimensions, reasons
 
     def rank_dispatches(
         self,
@@ -134,12 +175,12 @@ class InvestigationReasoner:
         remaining_requests: int,
     ) -> list[tuple[Artifact, Any]]:
         seen_types = {artifact.type for artifact in artifacts}
-        ranked: list[tuple[float, int, Artifact, Any, list[str]]] = []
+        ranked: list[tuple[float, int, Artifact, Any, dict[str, float], list[str]]] = []
         for index, (artifact, module) in enumerate(dispatches):
-            score, reasons = self._dispatch_score(
+            score, dimensions, reasons = self._dispatch_score(
                 artifact, module, seen_types=seen_types, findings=findings
             )
-            ranked.append((score, -index, artifact, module, reasons))
+            ranked.append((score, -index, artifact, module, dimensions, reasons))
         ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
         self.decisions.append({
             "wave": len(self.decisions) + 1,
@@ -152,12 +193,105 @@ class InvestigationReasoner:
                     "artifact": artifact.key,
                     "module": module.name,
                     "score": score,
+                    "expected_value": dimensions,
                     "reasons": reasons,
                 }
-                for score, _index, artifact, module, reasons in ranked[:8]
+                for score, _index, artifact, module, dimensions, reasons in ranked[:8]
+            ],
+            "deferred": [
+                {
+                    "artifact": artifact.key,
+                    "module": module.name,
+                    "score": score,
+                    "reason": "lower expected value than the prioritized work",
+                }
+                for score, _index, artifact, module, _dimensions, _reasons in ranked[8:16]
             ],
         })
-        return [(artifact, module) for _score, _index, artifact, module, _reasons in ranked]
+        return [
+            (artifact, module)
+            for _score, _index, artifact, module, _dimensions, _reasons in ranked
+        ]
+
+    def complete_wave(
+        self, *, new_findings: int, new_artifacts: int, requests_used: int
+    ) -> None:
+        """Record observed yield so later decisions can detect diminishing returns."""
+        if not self.decisions:
+            return
+        decision = self.decisions[-1]
+        decision["outcome"] = {
+            "new_findings": max(0, new_findings),
+            "new_artifacts": max(0, new_artifacts),
+            "requests_used": max(0, requests_used),
+        }
+        low_yield = new_findings == 0 and new_artifacts == 0 and requests_used > 0
+        self.low_yield_waves = self.low_yield_waves + 1 if low_yield else 0
+        decision["low_yield"] = low_yield
+
+    def stop_decision(
+        self,
+        *,
+        stop_reason: str | None,
+        frontier_exhausted: bool = True,
+        unresolved: int = 0,
+    ) -> StopDecision:
+        if stop_reason == "diminishing returns":
+            return StopDecision(
+                code="diminishing_returns",
+                stop=True,
+                terminal=True,
+                rationale=(
+                    "Repeated request waves produced no new evidence or artifacts; "
+                    "more automatic collection has low expected value."
+                ),
+                confidence=0.9,
+                triggers={"low_yield_waves": max(2, self.low_yield_waves)},
+            )
+        if stop_reason:
+            return StopDecision(
+                code="bounded_limit_reached",
+                stop=True,
+                terminal=False,
+                rationale=(
+                    f"Automatic collection stopped because {stop_reason}; continuing requires "
+                    "an explicit bounded-limit decision."
+                ),
+                confidence=0.98,
+                triggers={"limit": stop_reason},
+            )
+        if self.low_yield_waves >= 2:
+            return StopDecision(
+                code="diminishing_returns",
+                stop=True,
+                terminal=True,
+                rationale=(
+                    "Two consecutive request waves produced no new evidence or artifacts; "
+                    "more automatic collection has low expected value."
+                ),
+                confidence=0.9,
+                triggers={"low_yield_waves": self.low_yield_waves},
+            )
+        if frontier_exhausted:
+            return StopDecision(
+                code="authorized_frontier_exhausted",
+                stop=True,
+                terminal=unresolved == 0,
+                rationale=(
+                    "Every authorized lead was processed."
+                    if unresolved == 0
+                    else "Every authorized lead was processed; unresolved evidence now needs review."
+                ),
+                confidence=0.96,
+                triggers={"unresolved_findings": unresolved},
+            )
+        return StopDecision(
+            code="continue_expected_value",
+            stop=False,
+            terminal=False,
+            rationale="Authorized work remains with positive expected information value.",
+            confidence=0.8,
+        )
 
     def report(
         self,
@@ -237,6 +371,21 @@ class InvestigationReasoner:
         actions: dict[str, NextAction] = {}
 
         def add(action: NextAction) -> None:
+            if action.execution == "automatic" and not action.expected_value:
+                information_gain = {
+                    "critical": 0.9, "high": 0.8, "medium": 0.6, "low": 0.35,
+                }[action.priority]
+                action.expected_value = {
+                    "information_gain": information_gain,
+                    "evidence_quality": action.confidence,
+                    "cost": 0.35,
+                    "risk": 0.15 if passive_only else 0.4,
+                    "utility": round(
+                        0.52 * information_gain + 0.34 * action.confidence
+                        - 0.04 * 0.35 - 0.18 * (0.15 if passive_only else 0.4),
+                        3,
+                    ),
+                }
             existing = actions.get(action.id)
             if existing is None or _PRIORITY_RANK[action.priority] > _PRIORITY_RANK[existing.priority]:
                 actions[action.id] = action
@@ -394,6 +543,14 @@ class InvestigationReasoner:
                 key=lambda action: (-_PRIORITY_RANK[action.priority], action.id),
             ),
             decisions=self.decisions,
+            stop_decision=self.stop_decision(
+                stop_reason=stop_reason,
+                unresolved=(
+                    verdicts[Verdict.UNCERTAIN.value]
+                    + verdicts[Verdict.UNVERIFIABLE.value]
+                    + verdicts[Verdict.ERROR.value]
+                ),
+            ),
             guardrails=[
                 f"Scope remained {scope_mode}.",
                 "Only already-enabled modules were considered.",
@@ -403,6 +560,7 @@ class InvestigationReasoner:
                 ),
                 "Reasoning changed priority, never evidence or confidence scores.",
                 "Candidate-only and uncorroborated leads did not expand automatically.",
+                "Automatic work stopped when authorized leads or expected value were exhausted.",
             ],
         )
         return report.model_dump()

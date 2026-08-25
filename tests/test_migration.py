@@ -85,11 +85,11 @@ def test_backfill_adds_missing_column_preserving_rows(tmp_path):
 
 
 def test_database_is_at_packaged_migration_head(fresh_db):
-    assert fresh_db.schema_revision() == "20260825_0005"
+    assert fresh_db.schema_revision() == "20260825_0006"
     tables = set(sa.inspect(fresh_db.engine).get_table_names())
     assert {
         "observation_reviews", "source_health_checks", "audit_events",
-        "job_activity_nodes", "observation_contradictions",
+        "job_activity_nodes", "observation_contradictions", "evaluation_runs",
     } <= tables
 
 
@@ -106,7 +106,7 @@ def test_concurrent_sqlite_startup_serializes_migrations(tmp_path):
     with ThreadPoolExecutor(max_workers=4) as pool:
         revisions = list(pool.map(lambda _index: migrate(), range(4)))
 
-    assert revisions == ["20260825_0005"] * 4
+    assert revisions == ["20260825_0006"] * 4
 
 
 def test_account_migration_upgrades_existing_sqlite_schema(tmp_path):
@@ -152,7 +152,7 @@ def test_account_migration_upgrades_existing_sqlite_schema(tmp_path):
     with Database(dsn) as db:
         db.create_all()
         inspector = sa.inspect(db.engine)
-        assert db.schema_revision() == "20260825_0005"
+        assert db.schema_revision() == "20260825_0006"
         assert "owner_id" in {column["name"] for column in inspector.get_columns("targets")}
         assert "reviewer_user_id" in {
             column["name"] for column in inspector.get_columns("observation_reviews")

@@ -109,6 +109,34 @@ def test_dispatch_ranking_prefers_novel_reliable_identity_evidence() -> None:
 
     assert ranked[0][1].name == "identity"
     assert reasoner.decisions[0]["prioritized"][0]["module"] == "identity"
+    score = reasoner.decisions[0]["prioritized"][0]["expected_value"]
+    assert {"information_gain", "evidence_quality", "cost", "risk", "utility"} <= set(score)
+
+
+def test_reasoning_makes_stop_policy_explicit() -> None:
+    report = _report([_finding(Verdict.UNCERTAIN)])
+
+    assert report["version"] == 2
+    assert report["stop_decision"]["code"] == "authorized_frontier_exhausted"
+    assert report["stop_decision"]["terminal"] is False
+
+    bounded = _report([], stop_reason="max_requests reached")
+    assert bounded["stop_decision"]["code"] == "bounded_limit_reached"
+    assert bounded["stop_decision"]["terminal"] is False
+
+
+def test_reasoning_detects_two_low_yield_request_waves() -> None:
+    reasoner = InvestigationReasoner()
+    artifact = Artifact.make(ArtifactType.USERNAME, "known-handle")
+    module = SimpleNamespace(name="source", reliability_prior=0.8, produces=set())
+    for _index in range(2):
+        reasoner.rank_dispatches([artifact], [(artifact, module)], [], [artifact], 10)
+        reasoner.complete_wave(new_findings=0, new_artifacts=0, requests_used=1)
+
+    decision = reasoner.stop_decision(stop_reason=None)
+
+    assert decision.code == "diminishing_returns"
+    assert decision.terminal is True
 
 
 @pytest.mark.asyncio

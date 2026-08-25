@@ -136,6 +136,7 @@ class Module:
     expansion: bool = False
     capabilities: set[str] = field(default_factory=set)
     evidence_policy: EvidencePolicy = field(default_factory=EvidencePolicy)
+    estimated_request_cost: int = 1
 
     @property
     def kind_label(self) -> str:
@@ -152,6 +153,20 @@ class Module:
         if self.evidence_policy.candidate_only:
             declared.add("candidate-discovery")
         return sorted(declared)
+
+    @property
+    def execution_contract(self) -> dict:
+        """Versioned planner and evidence boundary for native module extensions."""
+        return {
+            "version": 1,
+            "consumes": sorted(kind.value for kind in self.consumes),
+            "produces": sorted(kind.value for kind in self.produces),
+            "interaction": "passive" if self.passive else "active",
+            "estimated_request_cost": self.estimated_request_cost,
+            "capabilities": self.declared_capabilities,
+            "evidence_policy": self.evidence_policy.model_dump(mode="json"),
+            "expansion_gated": self.expansion,
+        }
 
     def accepts(self, art: Artifact, *, expansion_enabled: bool = False) -> bool:
         return (

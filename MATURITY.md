@@ -12,7 +12,10 @@ The automated gate requires:
 3. The latest representative calibration has at least 100 usable samples, at
    least 20 positive and 20 negative samples, ECE at or below 0.10, and a false
    positive rate at or below 0.05.
-4. Every enabled network source has a passing designated canary no more than 14
+4. The latest evaluation uses independently verified cases, meets the minimum
+   category and phone-case coverage, and passes its verdict, profile, action,
+   stop-policy, precision, and recall thresholds.
+5. Every enabled network source has a passing designated canary no more than 14
    days old.
 
 Ground truth must be independently verified. Do not duplicate rows, generate
@@ -20,6 +23,10 @@ synthetic positives, or label the tool's own verdict as truth to satisfy the
 threshold. Investigator decisions can be exported with `specter review-labels`,
 but the operator remains responsible for verification and representative
 sampling.
+
+Run `specter evaluate --dataset reviewed-cases.json --require-ready` to persist
+the evaluation. The packaged replay file proves only that the evaluator works;
+it is permanently marked as a functional fixture and cannot satisfy this gate.
 
 Before tagging a release, also complete the manual checks in `RELEASING.md`.
 The gate is expected to remain blocked on a new installation until real labels

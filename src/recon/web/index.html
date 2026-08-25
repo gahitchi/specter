@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark" />
   <title>New investigation - Specter</title>
   <link rel="icon" type="image/png" href="/icon.png?v=bfaef8a7a5e4" />
-  <link rel="stylesheet" href="/static/style.css?v=7c22b30ed523" />
+  <link rel="stylesheet" href="/static/style.css?v=de21272694c9" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to workspace</a>
@@ -267,6 +267,7 @@
             <div class="section-heading"><h3>Observation queue</h3><span id="review-status" class="status-text" role="status"></span></div>
             <div class="control-bar">
               <label><span>Run ID</span><input id="review-run" type="number" min="1" placeholder="Latest" /></label>
+              <label><span>Show</span><select id="review-filter"><option value="needs_review">Needs a decision</option><option value="all">All evidence</option><option value="found">Positive findings</option><option value="inconclusive">Inconclusive</option></select></label>
               <button type="button" id="review-load" class="secondary-action">Load observations</button>
             </div>
             <div id="review-observations" class="data-region"></div>
@@ -351,14 +352,15 @@
         <section class="panel" id="panel-confidence" aria-labelledby="confidence-heading">
           <h2 id="confidence-heading" class="sr-only">Confidence analytics</h2>
           <div id="conf-summary" class="summary-region"></div>
-          <div class="chart-grid">
+          <div class="chart-grid observation-quality">
             <section class="chart-panel"><div class="section-heading"><h3>Confidence distribution</h3></div><canvas id="conf-hist" width="420" height="200"></canvas></section>
             <section class="chart-panel"><div class="section-heading"><h3>Calibration drift</h3><span class="metric-hint">Brier / ECE</span></div><canvas id="conf-drift" width="420" height="200"></canvas></section>
           </div>
-          <section class="section-block"><div class="section-heading"><h3>Verdict mix</h3></div><div id="conf-verdicts"></div></section>
-          <section class="section-block"><div class="section-heading"><h3>Evidence quality</h3><span class="metric-hint">provenance, time, and guarded pivots</span></div><div id="conf-quality" class="data-region"></div></section>
-          <section class="section-block"><div class="section-heading"><h3>Top score signals</h3></div><div id="conf-terms" class="data-region"></div></section>
-          <section class="section-block"><div class="section-heading"><h3>Source reliability</h3></div><div id="conf-sources" class="data-region"></div></section>
+          <section class="section-block observation-quality"><div class="section-heading"><h3>Verdict mix</h3></div><div id="conf-verdicts"></div></section>
+          <section class="section-block observation-quality"><div class="section-heading"><h3>Evidence quality</h3><span class="metric-hint">provenance, time, and guarded pivots</span></div><div id="conf-quality" class="data-region"></div></section>
+          <section class="section-block"><div class="section-heading"><h3>Evaluation readiness</h3><span class="metric-hint">reviewed replay cases, not test count</span></div><div id="evaluation-readiness" class="data-region"></div></section>
+          <section class="section-block observation-quality"><div class="section-heading"><h3>Top score signals</h3></div><div id="conf-terms" class="data-region"></div></section>
+          <section class="section-block observation-quality"><div class="section-heading"><h3>Source reliability</h3></div><div id="conf-sources" class="data-region"></div></section>
         </section>
 
         <section class="panel" id="panel-sources" aria-labelledby="sources-heading">
@@ -426,6 +428,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=f33845e83a8e"></script>
+  <script src="/static/app.js?v=71c83497c05e"></script>
 </body>
 </html>

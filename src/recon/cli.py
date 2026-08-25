@@ -747,6 +747,53 @@ def _cmd_source_pack(args) -> int:
         return 2
 
 
+def _cmd_evaluate(args) -> int:
+    from .evaluation import run_evaluation
+    from .store import get_db, repo
+
+    try:
+        report = run_evaluation(args.dataset)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    with get_db().session() as session:
+        row = repo.save_evaluation(session, report)
+        evaluation_id = row.id
+    if args.out:
+        Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        metrics = report["metrics"]
+        gate = report["gate"]
+        print(f"Evaluation #{evaluation_id}: {gate['status']}")
+        print(
+            f"  {len(report['cases'])} cases / {metrics['claims']} claims | "
+            f"precision {metrics['precision']:.1%} | recall {metrics['recall']:.1%} | "
+            f"verdict accuracy {metrics['verdict_accuracy']:.1%}"
+        )
+        for reason in gate["reasons"]:
+            print(f"  - {reason}")
+    return 0 if report["gate"]["ready"] or not args.require_ready else 1
+
+
+def _cmd_diagnostics(args) -> int:
+    from .diagnostics import collect
+
+    report = collect()
+    if args.out:
+        Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(f"Specter diagnostics: {report['status']}")
+        for check in report["checks"]:
+            marker = "OK" if check["ok"] else ("WARN" if not check["required"] else "FAIL")
+            print(f"  [{marker:<4}] {check['name']}: {check['detail']}")
+        print(f"  {report['privacy_note']}")
+    return 0 if report["status"] == "READY" else 1
+
+
 # --- main ------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -803,6 +850,21 @@ def build_parser() -> argparse.ArgumentParser:
     cal.add_argument("--labels", help="validated external ground-truth JSON file")
     cal.add_argument("--require-adequate", action="store_true",
                      help="exit nonzero unless sample size and class balance meet the gate")
+
+    evaluation = sub.add_parser(
+        "evaluate", help="replay reviewed cases and measure investigation quality"
+    )
+    evaluation.add_argument("--dataset", help="evaluation dataset JSON")
+    evaluation.add_argument("--out", help="write the complete report as JSON")
+    evaluation.add_argument("--json", action="store_true", help="print JSON")
+    evaluation.add_argument("--require-ready", action="store_true",
+                            help="exit nonzero unless the real-evidence gate is ready")
+
+    diagnostics = sub.add_parser(
+        "diagnostics", help="check installation, storage, updates, and runtime safety"
+    )
+    diagnostics.add_argument("--out", help="write a redacted JSON support report")
+    diagnostics.add_argument("--json", action="store_true", help="print JSON")
 
     sub.add_parser("analytics", help="confidence analytics across all stored observations")
 
@@ -915,6 +977,10 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(_cmd_provenance(args))
     if cmd == "calibrate":
         raise SystemExit(asyncio.run(_cmd_calibrate(args)))
+    if cmd == "evaluate":
+        raise SystemExit(_cmd_evaluate(args))
+    if cmd == "diagnostics":
+        raise SystemExit(_cmd_diagnostics(args))
     if cmd == "analytics":
         raise SystemExit(_cmd_analytics(args))
     if cmd == "review":

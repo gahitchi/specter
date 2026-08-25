@@ -12,6 +12,17 @@ def test_every_module_has_a_complete_source_contract():
     assert validate_contracts() == []
 
 
+def test_every_module_exposes_a_versioned_execution_contract():
+    from recon.modules.registry import MODULES
+
+    for module in MODULES:
+        contract = module.execution_contract
+        assert contract["version"] == 1
+        assert contract["estimated_request_cost"] >= 1
+        assert contract["consumes"]
+        assert contract["evidence_policy"] == module.evidence_policy.model_dump(mode="json")
+
+
 def test_canary_file_validation(tmp_path):
     path = tmp_path / "canaries.json"
     path.write_text(json.dumps({"canaries": [{
@@ -43,6 +54,7 @@ def test_maturity_gate_reports_external_evidence_blockers():
     assert by_name["source contracts"]["passed"] is True
     assert by_name["database migration"]["passed"] is True
     assert by_name["representative calibration"]["passed"] is False
+    assert by_name["representative evaluation"]["passed"] is False
     assert by_name["live source canaries"]["passed"] is False
     assert result["expansion_ready"] is False
 

@@ -68,7 +68,7 @@ _TYPE_PRIORITY = {
     ArtifactType.ASN: 28,
     ArtifactType.BREACH: 25,
     ArtifactType.HASH: 20,
-    ArtifactType.PHONE: 15,
+    ArtifactType.PHONE: 95,
     ArtifactType.NAME: 10,
 }
 
@@ -387,6 +387,9 @@ class GraphScanEngine:
                             self.artifacts,
                             self.settings.max_requests - client.request_count,
                         )
+                        findings_before = len(collected)
+                        artifacts_before = len(self.artifacts)
+                        requests_before = client.request_count
                         stopped = False
                         for i in range(0, len(dispatches), batch_size):
                             if client.request_count >= self.settings.max_requests:
@@ -411,6 +414,14 @@ class GraphScanEngine:
                                 stopped = True
                                 break
                         if stopped:
+                            break
+                        self.reasoner.complete_wave(
+                            new_findings=len(collected) - findings_before,
+                            new_artifacts=len(self.artifacts) - artifacts_before,
+                            requests_used=client.request_count - requests_before,
+                        )
+                        if state["next"] and self.reasoner.low_yield_waves >= 2:
+                            self.stop_reason = self.stop_reason or "diminishing returns"
                             break
                         frontier = sorted(
                             state["next"], key=self._priority, reverse=True

@@ -143,6 +143,12 @@ def validate_contracts() -> list[str]:
     for name, contract in CONTRACTS.items():
         if not contract.operator or not contract.evidence or not contract.terms_scope:
             errors.append(f"incomplete source contract: {name}")
+    for module in MODULES:
+        execution = module.execution_contract
+        if execution["version"] != 1 or module.estimated_request_cost < 1:
+            errors.append(f"invalid module execution contract: {module.name}")
+        if not module.consumes:
+            errors.append(f"module consumes no artifact type: {module.name}")
     return errors
 
 

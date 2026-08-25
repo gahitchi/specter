@@ -28,8 +28,8 @@ BANNER = r"""
 """
 
 CLI_COMMANDS = frozenset({
-    "analytics", "calibrate", "changes", "db-check", "db-upgrade",
-    "decrypt-export", "export-target", "graph", "insights", "maturity",
+    "analytics", "calibrate", "changes", "db-check", "db-upgrade", "diagnostics",
+    "decrypt-export", "evaluate", "export-target", "graph", "insights", "maturity",
     "ml-status", "ml-train", "monitor", "pair-review", "provenance",
     "purge-target", "retention", "review", "review-labels", "runs", "scan",
     "serve", "source-check", "source-pack", "sources", "targets", "user-add",

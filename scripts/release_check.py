@@ -22,9 +22,14 @@ REQUIRED_WHEEL_FILES = {
     "recon/assets/specter.ico",
     "recon/assets/specter.png",
     "recon/data/calibration_labels.json",
+    "recon/data/evaluation_cases.json",
     "recon/data/sites.json",
     "recon/desktop.py",
     "recon/desktop_settings.py",
+    "recon/diagnostics.py",
+    "recon/evaluation.py",
+    "recon/phone_intel.py",
+    "recon/migrations/versions/20260825_0006_evaluation_runs.py",
     "recon/migrations/versions/20260814_0004_job_activity.py",
     "recon/updater.py",
     "recon/web/app.js",
@@ -33,6 +38,7 @@ REQUIRED_WHEEL_FILES = {
 }
 REQUIRED_SDIST_FILES = {
     "CHANGELOG.md",
+    "EXTENDING.md",
     "LICENSE",
     "PRODUCTION.md",
     "README.md",
@@ -40,6 +46,7 @@ REQUIRED_SDIST_FILES = {
     "install.ps1",
     "install.sh",
     "pyproject.toml",
+    "scripts/operational_drill.py",
     "uninstall.ps1",
     "uninstall.sh",
 }
@@ -192,6 +199,21 @@ def _check_sdist(sdist: Path, errors: list[str]) -> None:
         errors.append(f"source distribution contains sensitive paths: {sensitive}")
 
 
+def _check_release_workflow(errors: list[str]) -> None:
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    required = {
+        "credential isolation": "persist-credentials: false",
+        "OIDC release identity": "id-token: write",
+        "artifact attestation": "actions/attest",
+        "container SBOM": "sbom: true",
+        "annotated tag verification": "--verify-tag",
+        "immutable container digest": "subject-digest:",
+    }
+    for label, marker in required.items():
+        if marker not in workflow:
+            errors.append(f"release workflow is missing {label}")
+
+
 def validate(dist_dir: Path, tag: str | None = None) -> list[str]:
     errors: list[str] = []
     with (ROOT / "pyproject.toml").open("rb") as handle:
@@ -206,6 +228,7 @@ def validate(dist_dir: Path, tag: str | None = None) -> list[str]:
     if tag and tag != f"v{version}":
         errors.append(f"tag {tag} does not match project version v{version}")
     _check_changelog(version, tag, errors)
+    _check_release_workflow(errors)
 
     wheels = sorted(dist_dir.glob("*.whl"))
     sdists = sorted(dist_dir.glob("*.tar.gz"))

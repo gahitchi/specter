@@ -2,6 +2,7 @@ include CHANGELOG.md
 include CODE_OF_CONDUCT.md
 include CONTRIBUTING.md
 include Dockerfile
+include EXTENDING.md
 include LICENSE
 include MATURITY.md
 include PRODUCTION.md

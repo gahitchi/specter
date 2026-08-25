@@ -33,8 +33,9 @@ release; package-name availability can change at any time.
 3. Back up and upgrade copies of real pre-release SQLite and PostgreSQL
    databases. Record successful recovery point and recovery time tests.
 4. Run explicitly authorized designated source canaries once and inspect
-   failures rather than retrying until green. Run `specter maturity`; high-risk
-   expansion releases require `READY`.
+   failures rather than retrying until green. Run calibration and the externally
+   verified evaluation, then `specter maturity`; high-risk expansion releases
+   require `READY`.
 5. For expansion releases, verify tenant-isolation and CSRF tests, inspect
    held-out model metrics, test the sanitized source-pack manifest, and start
    remote mode with disposable TLS and explicit trusted hosts.
@@ -52,6 +53,7 @@ uv run pip-audit --no-deps --disable-pip -r audit-requirements.txt
 uv build --clear --no-create-gitignore
 uv run twine check dist/*.whl dist/*.tar.gz
 uv run python scripts/release_check.py --dist-dir dist
+uv run python scripts/operational_drill.py
 ```
 
 7. Restore the latest PostgreSQL backup in an isolated environment, run
@@ -69,7 +71,8 @@ git push origin vX.Y.Z
    the GitHub Release files, PyPI metadata, container architectures, and
    attestations before announcing the release.
 10. Pull the GHCR image by digest into staging, complete a test investigation
-    with a non-administrator account, then promote the same digest to production.
+    with a non-administrator account, run `operational_drill.py` against staging
+    with that digest, then promote the same digest to production.
 
 Never place API keys, canary identities, investigation databases, backups,
 reports, model training labels, or raw source-pack data in a release artifact.

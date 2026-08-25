@@ -49,6 +49,7 @@ def assess(db, *, now: dt.datetime | None = None) -> dict:
 
     with db.session() as session:
         calibration = repo.list_calibration(session, limit=1)
+        evaluations = repo.list_evaluations(session, limit=1)
         latest_checks = repo.latest_source_health_checks(session)
     report = calibration[0].report if calibration else None
     quality = (report or {}).get("sample_quality", {})
@@ -67,6 +68,24 @@ def assess(db, *, now: dt.datetime | None = None) -> dict:
             f"n={(report or {}).get('n', 0)}, ECE={(report or {}).get('ece', 'n/a')}, "
             f"FP-rate={confusion.get('fp_rate', 'n/a')}, "
             f"labels={(report or {}).get('label_provenance', {}).get('source', 'untracked')}"
+        ),
+    })
+
+    evaluation = evaluations[0].report if evaluations else None
+    evaluation_gate = (evaluation or {}).get("gate") or {}
+    evaluation_dataset = (evaluation or {}).get("dataset") or {}
+    evaluation_passed = bool(
+        evaluation
+        and evaluation_gate.get("ready")
+        and evaluation_dataset.get("provenance") == "externally_verified"
+    )
+    checks.append({
+        "name": "representative evaluation",
+        "passed": evaluation_passed,
+        "detail": (
+            f"status={evaluation_gate.get('status', 'missing')}, "
+            f"cases={len((evaluation or {}).get('cases') or [])}, "
+            f"provenance={evaluation_dataset.get('provenance', 'untracked')}"
         ),
     })
 

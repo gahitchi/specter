@@ -73,9 +73,11 @@ docker compose -f compose.production.yaml run --rm \
 docker compose -f compose.production.yaml run --rm migrate db-check
 ```
 
-Supply representative, independently verified calibration labels and authorized
-canaries. Run `calibrate`, `source-check`, and `maturity` from the migration
-container. Do not copy synthetic test labels into a production database.
+Supply representative, independently verified calibration labels, an externally
+verified evaluation dataset, and authorized canaries. Run `calibrate`, `evaluate
+--dataset /path/to/reviewed-cases.json --require-ready`, `source-check`, and
+`maturity` from the migration container. Do not copy synthetic fixtures into a
+production database or describe them as accuracy evidence.
 
 Once `maturity` reports `READY`:
 
@@ -102,6 +104,9 @@ metrics endpoints.
   durable job retention policy and are removed with the job.
 - Saved profile synthesis: `GET /api/runs/{run_id}/profile` is tenant-scoped and
   returns the same evidence-backed profile stored in `Run.stats.profile`.
+- Redacted diagnostics: `specter diagnostics --out diagnostics.json` checks the
+  installation, database revision, packaged assets, update support, and source
+  contracts without exporting subjects or credentials.
 
 Alert on repeated readiness failures, HTTP 5xx responses, queue errors, disk
 pressure, PostgreSQL connection saturation, certificate renewal failure, and
@@ -132,6 +137,21 @@ docker compose -f compose.production.yaml up -d
 
 Record recovery point and recovery time results. A backup that has never been
 restored is not a verified backup.
+
+Before a release candidate is promoted, run the cross-platform local drill:
+
+```bash
+python scripts/operational_drill.py
+```
+
+After staging uses the exact candidate digest, record its readiness check:
+
+```bash
+python scripts/operational_drill.py \
+  --staging-url https://staging.example.org \
+  --container-digest sha256:REPLACE_WITH_64_HEX_CHARACTERS \
+  --json
+```
 
 ## Upgrade
 

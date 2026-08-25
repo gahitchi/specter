@@ -224,8 +224,11 @@ def synthesize_profile(
             "corroboration": corroboration,
             "sources": primary.get("sources") or [],
         }
+    from .phone_intel import summarize_phone_research
+
+    phone_research = summarize_phone_research(query, findings)
     return {
-        "version": 1,
+        "version": 2,
         "title": title,
         "status": status,
         "confidence": confidence,
@@ -250,6 +253,7 @@ def synthesize_profile(
             "identity_clusters": len(clusters),
         },
         "artifact_types": dict(sorted(Counter(artifact.type.value for artifact in artifacts).items())),
+        "phone_research": phone_research,
         "complete": False,
         "completeness_note": "A public-source profile can show evidence coverage, never prove completeness.",
     }

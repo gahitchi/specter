@@ -66,6 +66,14 @@ They were not published releases; their changes are included in 0.11.0.
   coverage, Maigret version compatibility reporting, and evidence-quality
   metrics for provenance coverage, duplicate collapse, blocked pivots,
   contradictions, parser failures, and timeouts.
+- A replayable end-to-end evaluation program with independently verified dataset
+  requirements, finding/profile/planner/stop-policy metrics, source breakdowns,
+  durable history, a dashboard readiness view, and maturity-gate integration.
+- Conservative phone lifecycle and mention-role synthesis, independently
+  corroborated identity links, and a dedicated phone dossier.
+- Redacted cross-platform diagnostics and non-destructive local/staging
+  operational drills for migrations, backup restoration, functional replay,
+  readiness probes, and immutable container digests.
 
 ### Changed
 
@@ -101,6 +109,12 @@ They were not published releases; their changes are included in 0.11.0.
   Contact details extracted from public pages require independent corroboration
   before recursive expansion, and historical observations no longer contribute
   to current identity clusters.
+- Investigation planning now scores expected information gain, evidence quality,
+  novelty, request cost, and policy risk, records observed wave yield, and emits
+  an explicit auditable stop decision including diminishing returns.
+- Evidence review defaults to unresolved work and surfaces contradiction counts;
+  phone, reasoning, and evaluation results use progressive disclosure in the
+  guided investigation workspace.
 
 ### Security
 

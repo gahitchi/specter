@@ -1113,6 +1113,32 @@ async def api_reviewed_calibration_labels(request: Request) -> JSONResponse:
     })
 
 
+@app.get("/api/evaluation")
+async def api_evaluation(request: Request) -> JSONResponse:
+    _require(_principal(request), "read_all")
+    with get_db().session() as session:
+        rows = repo.list_evaluations(session, limit=20)
+        return JSONResponse({
+            "latest": rows[0].report if rows else None,
+            "history": [
+                {
+                    **_row(row, ("id", "dataset_name", "provenance", "cases", "claims",
+                                  "precision", "recall", "gate_status")),
+                    "created_at": row.created_at.isoformat(),
+                }
+                for row in rows
+            ],
+        })
+
+
+@app.get("/api/diagnostics")
+async def api_diagnostics(request: Request) -> JSONResponse:
+    _require(_principal(request), "admin")
+    from .diagnostics import collect
+
+    return JSONResponse(collect())
+
+
 @app.get("/api/analytics")
 async def api_analytics(request: Request) -> JSONResponse:
     _require(_principal(request), "read_all")
@@ -1179,6 +1205,8 @@ async def api_modules() -> JSONResponse:
             ),
             "expansion": module.expansion,
             "capabilities": module.declared_capabilities,
+            "estimated_request_cost": module.estimated_request_cost,
+            "execution_contract": module.execution_contract,
             "evidence_policy": module.evidence_policy.model_dump(mode="json"),
             "gated": module.expansion and not SETTINGS.expansion_requested,
             "contract": CONTRACTS[module.name].as_dict(),

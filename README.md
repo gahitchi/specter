@@ -224,6 +224,12 @@ The completed workspace presents a profile synthesis before the raw evidence.
 merges. Coverage marked `checked` means sources ran without confirming a fact;
 it does not prove that the fact does not exist.
 
+Phone-led investigations add a number dossier that separates allocation
+metadata from directly verified public mentions, labels explicit person,
+organization, and directory contexts, surfaces stale or reassignment language,
+and promotes identity links only after independent corroboration. A public
+mention never establishes current ownership or control.
+
 Saved observations can be reviewed in the dashboard or from the CLI:
 
 ```bash
@@ -516,7 +522,9 @@ also inspect or apply revisions explicitly with `alembic current` and
 
 ```bash
 uv run specter calibrate
+uv run specter evaluate
 uv run specter analytics
+uv run specter diagnostics
 ```
 
 Calibration reports include reliability bins, Brier score, ECE/MCE, confusion
@@ -525,6 +533,16 @@ small functional fixture. It is not a statistically sufficient benchmark, and
 the tool marks reports based on a small or imbalanced sample as advisory. Supply
 independently verified labels through `RECON_CALIBRATION_FILE` before using the
 results to tune thresholds.
+
+`evaluate` replays reviewed end-to-end cases and measures finding precision and
+recall, false positives, synthesized profile status, planner actions, stop
+decisions, and source-level behavior. The packaged dataset is synthetic and
+will always report `NEEDS_EVIDENCE`; supply an externally verified dataset with
+case-level verification method and date before using `--require-ready`.
+
+`diagnostics` produces a redacted installation report covering packaged assets,
+database revision, storage access, source contracts, and update-manager support.
+It does not include subject identifiers, credentials, cookies, or database DSNs.
 
 The expansion gate combines representative calibration, migration state, source
 contracts, and recent designated canaries:

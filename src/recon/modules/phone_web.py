@@ -30,6 +30,7 @@ from ..evidence import (
 )
 from ..http_client import RequestBudgetExceeded
 from ..models import Finding, Verdict
+from ..phone_intel import classify_phone_mention
 from ..verify.defenses import detect as detect_defense
 from ..web_document import (
     WebDocument,
@@ -201,8 +202,11 @@ async def _emit_match(
         return False
 
     structured = structured_match.as_dict() if structured_match else None
+    mention = classify_phone_mention(
+        phone_context(document.visible_text, visible_span), structured
+    )
     identity_record = bool(structured_match and structured_match.identity_record)
-    confidence = 0.82 if identity_record else 0.78
+    confidence = (0.82 if identity_record else 0.78) - (0.12 if mention["historical"] else 0)
     title = document.title or candidate.title or (
         urlsplit(candidate.url).hostname or "Public page"
     )
@@ -217,6 +221,8 @@ async def _emit_match(
         reasons.append("The matching number appears in a telephone link.")
     if identity_record:
         reasons.append("Identity fields come from the same structured record as the phone number.")
+    if mention["historical"]:
+        reasons.append("The surrounding page contains lifecycle language; this mention may be historical.")
 
     signals = {"phone_e164": target_e164}
     if identity_record and structured and structured.get("email"):
@@ -249,6 +255,9 @@ async def _emit_match(
             "page_title": title,
             "context": context,
             "structured": structured,
+            "domain": (urlsplit(final_url).hostname or "").casefold(),
+            "mention_role": mention["role"],
+            "lifecycle_markers": mention["lifecycle_markers"],
             "discovery_source": "DuckDuckGo HTML search",
             "verified_directly": True,
         },
@@ -268,7 +277,9 @@ async def _emit_match(
         )],
         temporal=TemporalEvidence(
             observed_at=observed_at,
-            status=TemporalStatus.CURRENT,
+            status=(
+                TemporalStatus.HISTORICAL if mention["historical"] else TemporalStatus.CURRENT
+            ),
         ),
         completeness=Completeness.PARTIAL if incomplete else Completeness.COMPLETE,
     ))
@@ -281,7 +292,7 @@ async def _emit_match(
         origin=origin,
     ))
 
-    if not identity_record or not structured:
+    if not identity_record or not structured or mention["historical"]:
         return True
     lead_policy = EvidencePolicy(
         requires_corroboration=True,

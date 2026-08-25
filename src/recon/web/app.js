@@ -565,6 +565,34 @@ function renderProfile(profile) {
       + `<b>${esc(profileValue(item.value))}</b><span class="fact-standing">${esc(group)}</span></div>`)
   ).join("");
   const gaps = (profile.gaps || []).map(item => `<li>${esc(item)}</li>`).join("");
+  const phone = profile.phone_research;
+  let phoneResearch = "";
+  if (phone) {
+    const allocation = Object.entries(phone.allocation || {}).map(([key, value]) =>
+      `<div class="profile-fact"><span>${esc(key.replaceAll("_", " "))}</span><b>${esc(profileValue(value))}</b><span class="fact-standing provided">allocation</span></div>`
+    ).join("");
+    const mentions = (phone.mentions || []).map(item => {
+      const url = safeHttpUrl(item.url);
+      const title = url
+        ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(item.title || item.domain)}</a>`
+        : `<b>${esc(item.title || item.domain || "Public mention")}</b>`;
+      return `<div class="phone-mention"><div>${title}<span class="fact-standing ${item.temporal_status === "historical" ? "candidate" : "confirmed"}">${esc(item.temporal_status || "unknown")}</span></div>`
+        + `<span>${esc(item.domain || "")}${item.role && item.role !== "unknown" ? ` · ${esc(item.role)}` : ""}</span>`
+        + `${item.context ? `<p>${esc(item.context)}</p>` : ""}</div>`;
+    }).join("");
+    const links = (phone.identity_links || []).map(item =>
+      `<div class="profile-fact"><span>${esc(item.type)}</span><b>${esc(item.value)}</b><span class="fact-standing ${item.standing === "corroborated" ? "confirmed" : "candidate"}">${esc(item.standing)}</span></div>`
+    ).join("");
+    const lifecycle = phone.lifecycle || {};
+    phoneResearch = `<section class="profile-section phone-dossier"><div class="phone-dossier-head"><div><span class="eyebrow">Phone research</span><h3>${esc(phone.number || "Number dossier")}</h3></div>`
+      + `<span class="phone-lifecycle state-${esc(lifecycle.state || "unresolved")}">${esc(String(lifecycle.state || "unresolved").replaceAll("_", " "))}</span></div>`
+      + `<p class="profile-note">${esc(phone.ownership_note || "")}</p>`
+      + `<div class="profile-columns"><div><h4>Numbering plan</h4><div class="profile-list">${allocation || "<span class='tag'>No allocation metadata.</span>"}</div><p class="profile-note">${esc(phone.allocation_note || "")}</p></div>`
+      + `<div><h4>Identity links</h4><div class="profile-list">${links || "<span class='tag'>No identity link corroborated.</span>"}</div></div></div>`
+      + `<div class="phone-mentions"><h4>Verified public mentions</h4>${mentions || "<span class='tag'>No direct mention confirmed in the bounded check.</span>"}</div>`
+      + ((lifecycle.conflicts || []).length ? `<ul class="profile-gaps">${lifecycle.conflicts.map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : "")
+      + `</section>`;
+  }
   root.hidden = false;
   root.innerHTML = `<div class="profile-head"><div><span class="profile-status ${status}">${esc(status)}</span>`
     + `<h2>${esc(profile.title || "Profile synthesis")}</h2><p>${esc(profile.assessment)}</p></div>`
@@ -576,6 +604,7 @@ function renderProfile(profile) {
     + `<section class="profile-section"><h3>Public accounts</h3><div class="profile-list">`
     + `${accounts || "<span class='tag'>No account confirmed.</span>"}</div></section></div>`
     + (detailRows ? `<section class="profile-section"><h3>Established details</h3><div class="profile-list">${detailRows}</div></section>` : "")
+    + phoneResearch
     + `<section class="profile-section"><h3>Unresolved gaps</h3><ul class="profile-gaps">`
     + `${gaps || "<li>No material gap was recorded.</li>"}</ul></section>`
     + `<p class="profile-note">${esc(profile.completeness_note || "")}</p>`;
@@ -605,12 +634,16 @@ function renderReasoning(report, target = "#reasoning-view") {
     const inputs = (action.inputs || []).length
       ? `<details class="why"><summary>inputs</summary><div class="bd">${action.inputs.map(item => `<span class="bd-row">${esc(item)}</span>`).join("")}</div></details>`
       : "";
+    const value = action.expected_value || {};
+    const valueSummary = Object.keys(value).length
+      ? `<div class="expected-value" aria-label="Expected value"><span>gain <b>${Math.round((value.information_gain || 0) * 100)}%</b></span><span>quality <b>${Math.round((value.evidence_quality || 0) * 100)}%</b></span><span>cost <b>${Math.round((value.cost || 0) * 100)}%</b></span><span>risk <b>${Math.round((value.risk || 0) * 100)}%</b></span></div>`
+      : "";
     return `<article class="reasoning-action priority-${priority}">`
       + `<div class="action-heading"><span class="priority-label">${esc(priority)}</span>`
       + `<span class="execution-label">${esc(execution)}</span><span class="action-status">${esc(actionStatus)}</span></div>`
       + `<h4>${esc(action.title)}</h4><p>${esc(action.rationale)}</p>`
       + `<span class="action-confidence">${Math.round((action.confidence || 0) * 100)}% confidence</span>`
-      + requires + inputs + `</article>`;
+      + valueSummary + requires + inputs + `</article>`;
   }).join("");
   const uncertainties = (report.uncertainties || []).length
     ? `<section class="reasoning-notes"><h4>Uncertainty</h4><ul>${report.uncertainties.map(item => `<li>${esc(item)}</li>`).join("")}</ul></section>`
@@ -618,12 +651,20 @@ function renderReasoning(report, target = "#reasoning-view") {
   const guardrails = (report.guardrails || []).map(item => `<li>${esc(item)}</li>`).join("");
   const decisions = (report.decisions || []).map((decision) => {
     const prioritized = (decision.prioritized || []).map(item =>
-      `<span class="bd-row"><b>${esc(item.module)}</b> on ${esc(item.artifact)} · ${esc(item.score)}</span>`
+      `<span class="bd-row"><b>${esc(item.module)}</b> on ${esc(item.artifact)} · utility ${esc(item.score)}`
+      + `${item.expected_value ? ` · gain ${Math.round((item.expected_value.information_gain || 0) * 100)}% · risk ${Math.round((item.expected_value.risk || 0) * 100)}%` : ""}</span>`
     ).join("");
+    const outcome = decision.outcome
+      ? `<small>${decision.outcome.requests_used || 0} requests produced ${decision.outcome.new_findings || 0} findings and ${decision.outcome.new_artifacts || 0} new leads</small>`
+      : "";
     return `<div class="decision-wave"><b>Wave ${esc(decision.wave)}</b>`
       + `<span>${esc(decision.objective)} · ${esc(decision.candidate_dispatches)} candidates · ${esc(decision.remaining_requests)} requests remaining</span>`
-      + prioritized + `</div>`;
+      + outcome + prioritized + `</div>`;
   }).join("");
+  const stop = report.stop_decision || {};
+  const stopDecision = stop.code
+    ? `<section class="stop-decision ${stop.terminal ? "terminal" : "review"}"><div><span class="eyebrow">Why Specter stopped</span><h4>${esc(String(stop.code).replaceAll("_", " "))}</h4><p>${esc(stop.rationale || "")}</p></div><span>${Math.round((stop.confidence || 0) * 100)}% confidence</span></section>`
+    : "";
   root.hidden = false;
   root.innerHTML = `<div class="reasoning-overview"><div><span class="eyebrow">Current objective</span>`
     + `<h3>${esc(report.objective)}</h3><p>${esc(report.assessment)}</p></div>`
@@ -633,6 +674,7 @@ function renderReasoning(report, target = "#reasoning-view") {
     + `<span><b>${esc(state.independent_classes || 0)}</b> evidence classes</span></div>`
     + uncertainties + `<div class="reasoning-section-heading"><h4>Next actions</h4><span>${actions ? (report.next_actions || []).length : 0} proposed</span></div>`
     + `<div class="reasoning-actions">${actions}</div>`
+    + stopDecision
     + `<details class="reasoning-trace"><summary>Decision trace and guardrails</summary>`
     + `<div class="decision-waves">${decisions || "<span class='tag'>No traversal waves recorded.</span>"}</div>`
     + `<ul>${guardrails}</ul></details>`;
@@ -690,10 +732,15 @@ async function loadReview() {
     run = runs[0].id;
     $("#review-run").value = run;
   }
-  const response = await fetch(`/api/runs/${run}/observations`);
+  const [response, contradictionResponse] = await Promise.all([
+    fetch(`/api/runs/${run}/observations`),
+    fetch(`/api/runs/${run}/contradictions`),
+  ]);
   const data = await response.json();
+  const contradictionData = await contradictionResponse.json();
   if (!response.ok) { $("#review-status").textContent = data.error || "Unable to load run."; return; }
-  $("#review-status").textContent = `run #${run}: ${data.observations.length} observations`;
+  const contradictionCount = (contradictionData.contradictions || []).length;
+  $("#review-status").textContent = `run #${run}: ${data.observations.length} observations · ${contradictionCount} contradiction(s)`;
   if (!data.observations.length) {
     $("#review-observations").innerHTML = "<p class='tag'>No observations in this run.</p>";
     return;
@@ -714,7 +761,8 @@ async function loadReview() {
         ? `<p>match ${Math.round((dimensions.match_quality || 0) * 100)}% · source ${Math.round((dimensions.source_reliability || 0) * 100)}% · transformation ${Math.round((dimensions.transformation_certainty || 0) * 100)}%</p>`
         : "")
       + `</details>`;
-    html += `<tr><td><span class="v ${o.verdict}">${o.verdict}</span><br>${(+o.confidence).toFixed(2)}</td>`
+    const reviewState = o.review ? "reviewed" : "needs_review";
+    html += `<tr data-review-state="${reviewState}" data-verdict="${esc(o.verdict)}"><td><span class="v ${o.verdict}">${o.verdict}</span><br>${(+o.confidence).toFixed(2)}</td>`
       + `<td>${esc(o.source)}${lineage ? `<br><small class="tag">${lineage}</small>` : ""}</td><td><b>${esc(o.label)}</b><br><small class="tag">${esc((o.reasons||[]).join(" · "))}</small>${evidenceDetail}</td>`
       + `<td><div class="review-current">${current}</div><input class="review-note" data-observation="${o.id}" maxlength="4000" placeholder="review note" value="${esc((o.review||{}).note||"")}" />`
       + `<div class="review-actions" data-observation="${o.id}"><button data-decision="accepted">Accept</button><button data-decision="rejected" class="danger">Reject</button><button data-decision="unresolved" class="secondary">Unresolved</button></div></td></tr>`;
@@ -722,6 +770,19 @@ async function loadReview() {
   $("#review-observations").innerHTML = html + "</tbody></table>";
   document.querySelectorAll(".review-actions button").forEach((button) => {
     button.addEventListener("click", () => saveReview(button));
+  });
+  applyReviewFilter();
+}
+
+function applyReviewFilter() {
+  const filter = $("#review-filter")?.value || "needs_review";
+  document.querySelectorAll("#review-observations tbody tr").forEach((row) => {
+    const verdict = row.dataset.verdict;
+    const visible = filter === "all"
+      || (filter === "needs_review" && row.dataset.reviewState === "needs_review")
+      || (filter === "found" && verdict === "FOUND")
+      || (filter === "inconclusive" && ["UNCERTAIN", "UNVERIFIABLE", "ERROR"].includes(verdict));
+    row.hidden = !visible;
   });
 }
 
@@ -738,6 +799,7 @@ async function saveReview(button) {
 }
 
 $("#review-load").addEventListener("click", loadReview);
+$("#review-filter").addEventListener("change", applyReviewFilter);
 
 async function loadGovernance() {
   const [targets, audit] = await Promise.all([
@@ -1885,8 +1947,17 @@ function lineChart(id, series) {
 }
 
 async function loadAnalytics() {
-  const a = await (await fetch("/api/analytics")).json();
-  if (!a.n_observations) { $("#conf-summary").innerHTML = "<p class='tag'>No observations yet — run a saved scan.</p>"; return; }
+  const [a, evaluation] = await Promise.all([
+    fetch("/api/analytics").then(response => response.json()),
+    fetch("/api/evaluation").then(response => response.json()),
+  ]);
+  renderEvaluationReadiness(evaluation.latest);
+  const observationSections = document.querySelectorAll("#panel-confidence .observation-quality");
+  observationSections.forEach(section => { section.hidden = !a.n_observations; });
+  if (!a.n_observations) {
+    $("#conf-summary").innerHTML = "<p class='tag'>No observations yet — run a saved scan.</p>";
+    return;
+  }
   const ic = a.independence_coverage;
   $("#conf-summary").innerHTML = `<div class="cluster">${a.n_observations} observations · `
     + `corroboration ${ic.distinct_sources} source(s) → <b>${ic.distinct_classes}</b> independent class(es) `
@@ -1928,6 +1999,21 @@ async function loadAnalytics() {
       + a.source_health.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.kind || "")}</td><td>${bar(s.reliability)}</td><td>${s.successes}</td><td>${s.failures}</td><td>${badge(s.breaker_state)}</td></tr>`).join("")
       + "</tbody></table>"
     : "<p class='tag'>No source health yet.</p>";
+}
+
+function renderEvaluationReadiness(report) {
+  const root = $("#evaluation-readiness");
+  if (!report) {
+    root.innerHTML = `<div class="readiness-state needs-evidence"><strong>No evaluation recorded</strong><span>Run the packaged replay once, then replace it with independently reviewed cases.</span></div>`;
+    return;
+  }
+  const gate = report.gate || {};
+  const metrics = report.metrics || {};
+  const state = gate.ready ? "ready" : "needs-evidence";
+  const reasons = (gate.reasons || []).slice(0, 5).map(item => `<li>${esc(item)}</li>`).join("");
+  root.innerHTML = `<div class="readiness-state ${state}"><div><span class="eyebrow">${esc(report.dataset?.provenance || "unknown provenance")}</span><strong>${esc(gate.status || "NEEDS_EVIDENCE")}</strong><span>${esc(report.dataset?.name || "Evaluation")}</span></div>`
+    + `<div class="readiness-metrics"><span><b>${metrics.claims || 0}</b> claims</span><span><b>${Math.round((metrics.precision || 0) * 100)}%</b> precision</span><span><b>${Math.round((metrics.recall || 0) * 100)}%</b> recall</span><span><b>${Math.round((metrics.profile_accuracy || 0) * 100)}%</b> profile accuracy</span></div></div>`
+    + (reasons ? `<ul class="profile-gaps readiness-reasons">${reasons}</ul>` : "");
 }
 
 // --- Investigation reasoning ----------------------------------------------
