@@ -135,7 +135,7 @@ async def run_process(
             ),
             timeout=timeout_seconds,
         )
-    except TimeoutError as exc:
+    except asyncio.TimeoutError as exc:
         try:
             process.kill()
         except ProcessLookupError:
