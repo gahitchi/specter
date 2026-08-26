@@ -334,7 +334,7 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(2)
         update = apply_pending_update()
         _output(update.message or "No update is available.")
-        raise SystemExit(0 if update.applied or not update.update_available else 1)
+        raise SystemExit(0 if update.applied or update.handoff or not update.update_available else 1)
 
     if _port_open(host, port):
         if not _wait_healthy(url, timeout=2):
@@ -387,7 +387,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if action == "apply-update":
         result = apply_pending_update()
-        _restart_application(notice=result.message)
+        if not result.handoff:
+            _restart_application(notice=result.message)
 
 
 if __name__ == "__main__":

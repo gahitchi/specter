@@ -35,6 +35,7 @@ def update_environment(monkeypatch, tmp_path):
     monkeypatch.delenv("RECON_AUTO_UPDATE", raising=False)
     monkeypatch.delenv("RECON_ENV", raising=False)
     monkeypatch.setattr(updater, "_installation_manager", lambda: ("uv", "uv"))
+    monkeypatch.setattr(updater, "_requires_update_handoff", lambda: False)
     return tmp_path / "updates"
 
 
@@ -424,6 +425,61 @@ def test_apply_can_use_cached_update_while_check_is_offline(monkeypatch, update_
     assert updater.apply_pending_update().applied
 
 
+def test_windows_apply_waits_for_exit_before_replacing_the_environment(
+    monkeypatch, update_environment
+):
+    project = _cached_project(update_environment, REVISION_B)
+    scheduled = []
+    monkeypatch.setattr(updater, "_requires_update_handoff", lambda: True)
+    monkeypatch.setattr(
+        updater,
+        "_schedule_windows_update",
+        lambda manager, revision, cached: scheduled.append((manager, revision, cached)),
+    )
+    monkeypatch.setattr(
+        updater.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("replaced the active Windows environment")
+        ),
+    )
+
+    result = updater.apply_pending_update()
+
+    assert result.handoff and not result.applied
+    assert scheduled == [(('uv', 'uv'), REVISION_B, project)]
+    assert (update_environment / "pending.json").exists()
+
+
+def test_windows_update_helper_verifies_before_recording_success():
+    script = updater._windows_update_script()
+
+    assert "Wait-Process -Id $ParentPid" in script
+    assert "tool install --force" in script
+    assert "from recon.launch import _icon_path" in script
+    assert script.index("failed its health check") < script.index("installed.json")
+    assert "Remove-Item -LiteralPath (Join-Path $CacheRoot 'pending.json')" in script
+    assert "SPECTER_STARTUP_NOTICE" in script
+
+
+def test_windows_apply_preserves_download_when_handoff_cannot_start(
+    monkeypatch, update_environment
+):
+    _cached_project(update_environment, REVISION_B)
+    monkeypatch.setattr(updater, "_requires_update_handoff", lambda: True)
+    monkeypatch.setattr(
+        updater,
+        "_schedule_windows_update",
+        lambda *_args: (_ for _ in ()).throw(OSError("PowerShell unavailable")),
+    )
+
+    result = updater.apply_pending_update()
+
+    assert result.update_available and not result.handoff
+    assert "current version is unchanged" in result.message
+    assert (update_environment / "pending.json").exists()
+
+
 def test_pipx_apply_command_uses_cached_project(tmp_path):
     assert updater._apply_command(("pipx", "pipx"), tmp_path) == [
         "pipx", "install", "--force", "--quiet", f"{tmp_path}[desktop]"
@@ -568,6 +624,28 @@ def test_manual_update_applies_and_exits(monkeypatch, capsys):
     assert "applied" in capsys.readouterr().out
 
 
+def test_manual_windows_update_handoff_exits_successfully(monkeypatch, capsys):
+    from recon import launch
+
+    monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
+    monkeypatch.setattr(
+        launch,
+        "apply_pending_update",
+        lambda: updater.UpdateResult(
+            attempted=True,
+            update_available=True,
+            handoff=True,
+            message="installing after exit",
+        ),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        launch.main(["--update"])
+
+    assert raised.value.code == 0
+    assert "installing after exit" in capsys.readouterr().out
+
+
 def test_launcher_prepares_server_then_workers_and_monitor(monkeypatch):
     from recon import launch
 
@@ -694,6 +772,46 @@ def test_desktop_update_request_stops_services_applies_and_restarts(monkeypatch,
     launch.main([])
 
     assert events == ["stop", "stop", "stop", "apply", "restart:updated"]
+
+
+def test_desktop_windows_update_handoff_leaves_restart_to_helper(monkeypatch, tmp_path):
+    from recon import launch
+
+    events: list[str] = []
+
+    class RunningProcess:
+        running = True
+
+        def poll(self):
+            return None if self.running else 0
+
+        def terminate(self):
+            self.running = False
+            events.append("stop")
+
+        def wait(self, timeout):
+            return 0
+
+    monkeypatch.setattr(launch, "_port_open", lambda host, port: False)
+    monkeypatch.setattr(launch, "_prepare_database", lambda: None)
+    monkeypatch.setattr(launch, "_wait_healthy", lambda url: True)
+    monkeypatch.setattr(launch, "state_root", lambda: tmp_path)
+    monkeypatch.setattr(launch, "_spawn", lambda args, **_kwargs: RunningProcess())
+    monkeypatch.setattr(launch, "_run_desktop", lambda url, **_kwargs: "apply-update")
+    monkeypatch.setattr(
+        launch,
+        "apply_pending_update",
+        lambda: (events.append("handoff") or updater.UpdateResult(handoff=True)),
+    )
+    monkeypatch.setattr(
+        launch,
+        "_restart_application",
+        lambda **_kwargs: events.append("unexpected restart"),
+    )
+
+    launch.main([])
+
+    assert events == ["stop", "stop", "stop", "handoff"]
 
 
 def test_desktop_log_rotates_before_startup(monkeypatch, tmp_path):

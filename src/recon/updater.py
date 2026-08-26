@@ -42,6 +42,7 @@ class UpdateResult:
     update_available: bool = False
     downloaded: bool = False
     applied: bool = False
+    handoff: bool = False
     message: str = ""
 
 
@@ -527,6 +528,145 @@ def _apply_command(manager: tuple[str, str], project: Path) -> list[str]:
     return [executable, "install", "--force", "--quiet", desktop_project]
 
 
+def _requires_update_handoff() -> bool:
+    """Return whether replacing this environment requires the process to exit first."""
+    return os.name == "nt"
+
+
+def _windows_application_executable() -> Path | None:
+    candidates: list[str | None] = [shutil.which("specter-app")]
+    if sys.argv and sys.argv[0]:
+        invoked = Path(sys.argv[0]).expanduser()
+        candidates.append(str(invoked.with_name("specter-app.exe")))
+    candidates.append(str(Path.home() / ".local" / "bin" / "specter-app.exe"))
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.is_file() and path.name.casefold() == "specter-app.exe":
+            return path.resolve()
+    return None
+
+
+def _windows_update_script() -> str:
+    """Return the external PowerShell updater used after Specter has exited."""
+    return r'''param(
+    [Parameter(Mandatory=$true)][int]$ParentPid,
+    [Parameter(Mandatory=$true)][string]$ManagerName,
+    [Parameter(Mandatory=$true)][string]$ManagerPath,
+    [Parameter(Mandatory=$true)][string]$ProjectPath,
+    [Parameter(Mandatory=$true)][string]$ToolPython,
+    [Parameter(Mandatory=$true)][AllowEmptyString()][string]$AppPath,
+    [Parameter(Mandatory=$true)][string]$CacheRoot,
+    [Parameter(Mandatory=$true)][string]$Revision
+)
+
+$ErrorActionPreference = 'Stop'
+$encoding = New-Object System.Text.UTF8Encoding($false)
+$logPath = Join-Path $CacheRoot 'apply-update.log'
+$notice = 'Specter could not install the update. The downloaded build is still available.'
+
+try {
+    Wait-Process -Id $ParentPid -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    $desktopProject = $ProjectPath + '[desktop]'
+    if ($ManagerName -eq 'uv') {
+        & $ManagerPath tool install --force --quiet --no-progress $desktopProject
+    } elseif ($ManagerName -eq 'pipx') {
+        & $ManagerPath install --force --quiet $desktopProject
+    } else {
+        throw "Unsupported installation manager: $ManagerName"
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "The installation manager exited with code $LASTEXITCODE"
+    }
+
+    & $ToolPython -c "from recon.launch import _icon_path; from PySide6 import QtWidgets; raise SystemExit(0 if _icon_path().is_file() else 1)"
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The replacement installation failed its health check'
+    }
+
+    $installed = @{
+        revision = $Revision
+        applied_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    } | ConvertTo-Json
+    [System.IO.File]::WriteAllText((Join-Path $CacheRoot 'installed.json'), $installed, $encoding)
+    Remove-Item -LiteralPath (Join-Path $CacheRoot 'pending.json') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $notice = 'Specter was updated successfully'
+} catch {
+    $details = ($_ | Out-String).Trim()
+    [System.IO.File]::WriteAllText($logPath, $details, $encoding)
+}
+
+$env:SPECTER_STARTUP_NOTICE = $notice
+if ($AppPath -and (Test-Path -LiteralPath $AppPath)) {
+    Start-Process -FilePath $AppPath -WorkingDirectory $HOME
+} elseif (Test-Path -LiteralPath $ToolPython) {
+    $pythonw = Join-Path (Split-Path -Parent $ToolPython) 'pythonw.exe'
+    $hostExecutable = if (Test-Path -LiteralPath $pythonw) { $pythonw } else { $ToolPython }
+    Start-Process -FilePath $hostExecutable -ArgumentList @('-m', 'recon.launch') -WorkingDirectory $HOME
+}
+'''
+
+
+def _schedule_windows_update(
+    manager: tuple[str, str], revision: str, project: Path
+) -> None:
+    root = _cache_root()
+    root.mkdir(parents=True, exist_ok=True)
+    powershell = (
+        Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    if not powershell.is_file():
+        raise OSError("Windows PowerShell is unavailable")
+
+    script = root / "apply-update.ps1"
+    script.write_text(_windows_update_script(), encoding="utf-8")
+    application = _windows_application_executable()
+    command = [
+        str(powershell),
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(script),
+        "-ParentPid",
+        str(os.getpid()),
+        "-ManagerName",
+        manager[0],
+        "-ManagerPath",
+        manager[1],
+        "-ProjectPath",
+        str(project),
+        "-ToolPython",
+        sys.executable,
+        "-AppPath",
+        str(application or ""),
+        "-CacheRoot",
+        str(root),
+        "-Revision",
+        revision,
+    ]
+    subprocess.Popen(  # nosec B603
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=(
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+        ),
+        close_fds=True,
+    )
+
+
 def _installation_is_healthy(*, timeout: float = 20.0) -> bool:
     """Verify the replacement environment from a fresh Python process."""
     try:
@@ -563,6 +703,25 @@ def apply_pending_update(*, timeout: float = 180.0) -> UpdateResult:
         if pending is None:
             return check
     revision, project = pending
+    if _requires_update_handoff():
+        try:
+            _schedule_windows_update(manager, revision, project)
+        except OSError:
+            return UpdateResult(
+                attempted=True,
+                update_available=True,
+                message=(
+                    "Specter could not start the update installer; the downloaded build "
+                    "is still available and the current version is unchanged"
+                ),
+            )
+        return UpdateResult(
+            attempted=True,
+            update_available=True,
+            handoff=True,
+            message="Specter will install the update after it closes",
+        )
+
     try:
         completed = subprocess.run(  # nosec B603
             _apply_command(manager, project),
