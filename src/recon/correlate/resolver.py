@@ -15,7 +15,7 @@ import jellyfish
 from ..config import SETTINGS
 
 # Signal keys we treat as strong, unique identifiers.
-STRONG = {"email", "gravatar_hash", "orcid", "phone_e164"}
+STRONG = {"email", "gravatar_hash", "orcid", "phone_e164", "bluesky_did"}
 
 
 @dataclass
@@ -43,6 +43,8 @@ def record_from(obs_id: int, category: str, label: str,
         base = k.split(":", 1)[0]
         if base == "username":
             rec.usernames.add(_norm_handle(v))
+        elif base == "name":
+            rec.names.add(" ".join(v.casefold().split()))
         elif base == "email":
             rec.emails.add(v.lower())
             rec.add_strong("email", v.lower())
@@ -56,7 +58,7 @@ def record_from(obs_id: int, category: str, label: str,
 
 # Per-attribute weights (log-likelihood-ish; tuned, not learned).
 _W = {
-    "gravatar_hash": 9.0, "orcid": 9.0, "email": 8.0,
+    "gravatar_hash": 9.0, "orcid": 9.0, "bluesky_did": 9.0, "email": 8.0,
     "phone_e164": 8.0,
 }
 
@@ -80,7 +82,7 @@ def score(a: Record, b: Record) -> tuple[float, list[str]]:
 
     # Handle reuse across sites: suggestive, not proof.
     if a.usernames & b.usernames:
-        w += 3.0
+        w += 2.0
         reasons.append("same username handle")
 
     # Name similarity via Jaro-Winkler (mirrors Specter's >=0.92).
@@ -88,7 +90,7 @@ def score(a: Record, b: Record) -> tuple[float, list[str]]:
         best = max(jellyfish.jaro_winkler_similarity(x, y)
                    for x in a.names for y in b.names)
         if best >= SETTINGS.name_match_threshold:
-            w += 4.0 * best
+            w += 3.0 * best
             reasons.append(f"name match (JW {best:.2f})")
         elif best < 0.7:
             w -= 3.0

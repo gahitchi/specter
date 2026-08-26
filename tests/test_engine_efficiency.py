@@ -211,7 +211,9 @@ async def test_high_priority_lead_expands_before_low_when_budget_tight(monkeypat
     # fully intact. max_concurrency=1 -> one dispatch per batch; max_requests=1
     # leaves room for exactly one of the two leads. Priority must spend it on
     # the EMAIL and skip the IP.
-    settings = dataclasses.replace(_FAST, max_requests=1, max_concurrency=1)
+    settings = dataclasses.replace(
+        _FAST, max_requests=1, max_concurrency=1, scope_mode="aggressive"
+    )
     eng = GraphScanEngine(Query(domain="example.com"), settings)
     [ev async for ev in eng.stream()]
 

@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark" />
   <title>New investigation - Specter</title>
   <link rel="icon" type="image/png" href="/icon.png?v=bfaef8a7a5e4" />
-  <link rel="stylesheet" href="/static/style.css?v=de21272694c9" />
+  <link rel="stylesheet" href="/static/style.css?v=b3de131c03ad" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to workspace</a>
@@ -187,7 +187,7 @@
                   <div class="execution-legend" aria-label="Execution graph legend">
                     <span><i class="input-node"></i>Input</span>
                     <span><i class="running-node"></i>In progress</span>
-                    <span><i class="success-node"></i>Confirmed</span>
+                    <span><i class="success-node"></i>Positive observation</span>
                     <span><i class="uncertain-node"></i>Needs checking</span>
                     <span><i class="not-found-node"></i>Not found / error</span>
                     <span><i class="process-shape"></i>Process</span>
@@ -207,7 +207,7 @@
                 <div class="discovery-heading">
                   <div><span class="eyebrow">Investigation journal</span><h4 id="discovery-heading">Discoveries</h4></div>
                   <div class="discovery-totals" aria-label="Discovery totals">
-                    <span><strong id="discovery-confirmed">0</strong> confirmed</span>
+                    <span><strong id="discovery-observed">0</strong> observed</span>
                     <span><strong id="discovery-open">0</strong> to review</span>
                   </div>
                 </div>
@@ -358,7 +358,35 @@
           </div>
           <section class="section-block observation-quality"><div class="section-heading"><h3>Verdict mix</h3></div><div id="conf-verdicts"></div></section>
           <section class="section-block observation-quality"><div class="section-heading"><h3>Evidence quality</h3><span class="metric-hint">provenance, time, and guarded pivots</span></div><div id="conf-quality" class="data-region"></div></section>
-          <section class="section-block"><div class="section-heading"><h3>Evaluation readiness</h3><span class="metric-hint">reviewed replay cases, not test count</span></div><div id="evaluation-readiness" class="data-region"></div></section>
+          <section class="section-block"><div class="section-heading"><h3>Evaluation readiness</h3><span class="metric-hint">reviewed investigation snapshots</span></div><div id="evaluation-readiness" class="data-region"></div></section>
+          <section class="section-block" data-role="admin">
+            <details class="tool-curtain" id="evaluation-kit-curtain">
+              <summary><span>Quality review set</span><span id="evaluation-kit-summary" class="metric-hint">Not created</span></summary>
+              <div class="tool-curtain-body">
+                <form id="evaluation-kit-create" class="tool-form compact-tool-form">
+                  <label><span>Review type</span><select name="review_mode" required><option value="operator_pilot" selected>Private self-check</option><option value="independent">Independent release evaluation</option></select></label>
+                  <label><span>Review set name</span><input name="name" value="My Specter quality check" maxlength="160" required /></label>
+                  <label class="wide-field"><span>Purpose</span><input name="description" value="Authorized checks using my own information" maxlength="1000" /></label>
+                  <div class="form-submit"><button type="submit" class="primary-action">Create review set</button></div>
+                </form>
+                <form id="evaluation-kit-capture" class="tool-form compact-tool-form" hidden>
+                  <label><span>Finished run</span><input name="run_id" type="number" min="1" required /></label>
+                  <label><span>Case label</span><input name="case_id" pattern="[a-z0-9][a-z0-9_-]*" placeholder="phone-positive-01" required /></label>
+                  <label><span>Person label</span><input name="subject_group" pattern="[a-z0-9][a-z0-9_-]*" value="me" required /></label>
+                  <label><span>Starting clue</span><select name="category" required><option value="phone">Phone</option><option value="username">Username</option><option value="email">Email</option><option value="domain">Domain</option><option value="name">Name</option><option value="multi">Multiple clues</option></select></label>
+                  <label><span>Permission</span><select name="authorization_basis" required><option value="self_owned">My own identity</option><option value="documented_authorization">Written permission</option><option value="controlled_test_asset">Controlled test account</option><option value="public_organization_asset">Public organization asset</option></select></label>
+                  <div class="form-submit">
+                    <button type="submit" class="primary-action">Add finished investigation</button>
+                    <button type="button" id="evaluation-kit-download" class="secondary-action">Download self-check</button>
+                    <label class="button-link review-file-button" for="evaluation-kit-file">Choose completed review</label>
+                    <input id="evaluation-kit-file" type="file" accept=".csv,text/csv" hidden />
+                    <button type="button" id="evaluation-kit-finalize" class="secondary-action" disabled>Import and evaluate</button>
+                  </div>
+                </form>
+                <div id="evaluation-kit-status" class="status-text" role="status" aria-live="polite"></div>
+              </div>
+            </details>
+          </section>
           <section class="section-block observation-quality"><div class="section-heading"><h3>Top score signals</h3></div><div id="conf-terms" class="data-region"></div></section>
           <section class="section-block observation-quality"><div class="section-heading"><h3>Source reliability</h3></div><div id="conf-sources" class="data-region"></div></section>
         </section>
@@ -428,6 +456,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=71c83497c05e"></script>
+  <script src="/static/app.js?v=744d18f94c58"></script>
 </body>
 </html>

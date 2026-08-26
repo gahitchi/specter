@@ -84,8 +84,13 @@ async def test_github_harvests_commit_email():
     findings, artifacts = await _run_module(github.MODULE,
                                             Artifact.make(ArtifactType.USERNAME, "octocat"))
     emails = {a.value for a in artifacts if a.type == ArtifactType.EMAIL}
-    assert "dev@example.com" in emails                 # real commit email harvested
+    assert "dev@example.com" in emails
     assert all("noreply.github.com" not in e for e in emails)  # noreply filtered
+    observed = next(item for item in artifacts if item.value == "dev@example.com")
+    assert observed.policy.candidate_only is True
+    commit_finding = next(item for item in findings if item.source == "github:commits")
+    assert commit_finding.policy.candidate_only is True
+    assert "other people" in commit_finding.reasons[1]
     assert any(a.type == ArtifactType.ACCOUNT_PROFILE for a in artifacts)
 
 

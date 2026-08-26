@@ -24,7 +24,28 @@ def test_phone_context_flags_historical_reassignment_without_claiming_ownership(
     assert {"former_number", "reassigned"} <= set(classification["lifecycle_markers"])
 
 
-def test_phone_summary_requires_independent_origins_for_identity_link() -> None:
+def test_phone_context_distinguishes_service_and_directory_records() -> None:
+    service = classify_phone_mention(
+        "Call reception for appointments.",
+        {"types": ["Organization"], "name": "Example Clinic"},
+        page_title="Contact us",
+        page_url="https://clinic.example/contact",
+    )
+    directory = classify_phone_mention(
+        "People search result",
+        {"types": ["Person"], "name": "Alice Example"},
+        page_title="Reverse phone lookup directory listing",
+        page_url="https://lookup.example/result",
+    )
+
+    assert service["association"] == "service_contact"
+    assert service["identity_candidate"] is False
+    assert directory["association"] == "directory_listing"
+    assert directory["independence_group"] == "phone-directory"
+    assert directory["pivot_eligible"] is False
+
+
+def test_phone_summary_keeps_repeated_names_as_candidates() -> None:
     findings = [
         Finding(
             source="phone:web",
@@ -48,8 +69,10 @@ def test_phone_summary_requires_independent_origins_for_identity_link() -> None:
     summary = summarize_phone_research(Query(phone="+14155552671"), findings)
 
     assert summary is not None
-    assert summary["identity_links"][0]["standing"] == "corroborated"
+    assert summary["identity_links"][0]["standing"] == "candidate"
     assert summary["identity_links"][0]["independent_origins"] == 2
+    assert summary["decision"]["status"] == "needs_corroboration"
+    assert summary["decision"]["can_expand_automatically"] is False
     assert summary["ownership_established"] is False
 
 
@@ -71,3 +94,4 @@ def test_phone_summary_surfaces_conflicting_names_as_possible_reuse_review() -> 
 
     assert summary["lifecycle"]["state"] == "possible_reuse"
     assert summary["lifecycle"]["conflicts"]
+    assert summary["decision"]["can_expand_automatically"] is False

@@ -5,7 +5,7 @@
     respond @metrics 404
 
     request_body {
-        max_size 64KB
+        max_size 1MB
     }
 
     header {

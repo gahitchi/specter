@@ -8,6 +8,8 @@ small so it behaves like a careful scraper, not an API fan-out.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
@@ -106,6 +108,7 @@ def _search_queries(number: Any) -> list[str]:
     values = [
         phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.E164),
         phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.INTERNATIONAL),
+        phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.NATIONAL),
     ]
     queries: list[str] = []
     for value in values:
@@ -150,12 +153,21 @@ def _parse_search_results(body: str) -> list[SearchCandidate]:
     return results
 
 
+def _candidate_priority(candidate: SearchCandidate) -> int:
+    classification = classify_phone_mention(
+        "",
+        page_title=candidate.title,
+        page_url=candidate.url,
+    )
+    return 1 if classification["source_kind"] == "directory" else 0
+
+
 async def _discover(number: Any, ctx: ModuleContext) -> DiscoveryResult:
     candidates: list[SearchCandidate] = []
     seen: set[str] = set()
     successful = 0
     unavailable = 0
-    queries = _search_queries(number)[:ctx.settings.phone_web_max_queries]
+    queries = _search_queries(number)[: ctx.settings.phone_web_max_queries]
     for query in queries:
         try:
             response = await ctx.client.fetch(_SEARCH_URL, params={"q": query, "kl": "wt-wt"})
@@ -169,18 +181,32 @@ async def _discover(number: Any, ctx: ModuleContext) -> DiscoveryResult:
             unavailable += 1
             continue
         successful += 1
+        added_for_query = 0
         for candidate in _parse_search_results(response.text):
             if candidate.url in seen:
                 continue
             seen.add(candidate.url)
             candidates.append(candidate)
-            if len(candidates) >= ctx.settings.phone_web_max_pages:
+            added_for_query += 1
+            if added_for_query >= ctx.settings.phone_web_max_pages:
                 break
     return DiscoveryResult(
-        candidates=candidates[:ctx.settings.phone_web_max_pages],
+        candidates=sorted(candidates, key=_candidate_priority)[: ctx.settings.phone_web_max_pages],
         successful_queries=successful,
         unavailable_queries=unavailable,
     )
+
+
+def _claim_fingerprint(context: str | None, structured: dict[str, Any] | None) -> str:
+    record = structured or {}
+    payload = {
+        "context": (context or "").casefold(),
+        "name": str(record.get("name") or "").casefold(),
+        "email": str(record.get("email") or "").casefold(),
+        "urls": sorted(str(value).casefold() for value in record.get("urls", [])),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
 
 
 async def _emit_match(
@@ -194,23 +220,34 @@ async def _emit_match(
 ) -> bool:
     visible_span = matching_phone_span(document.visible_text, target_e164, region)
     tel_match = any(
-        matching_phone_span(value, target_e164, region)
-        for value in document.telephone_links
+        matching_phone_span(value, target_e164, region) for value in document.telephone_links
     )
     structured_match = find_structured_phone_match(document, target_e164, region)
     if not visible_span and not tel_match and not structured_match:
         return False
 
     structured = structured_match.as_dict() if structured_match else None
+    title = document.title or candidate.title or (urlsplit(candidate.url).hostname or "Public page")
+    context = phone_context(document.visible_text, visible_span)
+    if context is None and structured_match and document.visible_text:
+        context = document.visible_text[:260]
     mention = classify_phone_mention(
-        phone_context(document.visible_text, visible_span), structured
+        context or "",
+        structured,
+        page_title=title,
+        page_url=final_url,
     )
     identity_record = bool(structured_match and structured_match.identity_record)
-    confidence = (0.82 if identity_record else 0.78) - (0.12 if mention["historical"] else 0)
-    title = document.title or candidate.title or (
-        urlsplit(candidate.url).hostname or "Public page"
-    )
-    context = phone_context(document.visible_text, visible_span)
+    if mention["identity_candidate"]:
+        confidence = 0.82
+    elif mention["source_kind"] == "directory":
+        confidence = 0.58
+    elif mention["role"] in {"organization", "service"}:
+        confidence = 0.72
+    else:
+        confidence = 0.68
+    if mention["historical"]:
+        confidence = max(0.0, confidence - 0.18)
     reasons = [
         "The page was fetched directly and contains the same normalized phone number.",
         "This confirms a public mention, not current ownership or control of the number.",
@@ -221,18 +258,32 @@ async def _emit_match(
         reasons.append("The matching number appears in a telephone link.")
     if identity_record:
         reasons.append("Identity fields come from the same structured record as the phone number.")
+    if not mention["identity_candidate"]:
+        reasons.append(
+            "The page context is not eligible to steer person-level research automatically."
+        )
     if mention["historical"]:
-        reasons.append("The surrounding page contains lifecycle language; this mention may be historical.")
+        reasons.append(
+            "The surrounding page contains lifecycle language; this mention may be historical."
+        )
 
     signals = {"phone_e164": target_e164}
-    if identity_record and structured and structured.get("email"):
-        signals["email"] = structured["email"]
+    if mention["identity_candidate"] and structured:
+        if structured.get("name"):
+            signals["name"] = structured["name"]
+        if structured.get("email"):
+            signals["email"] = structured["email"]
     observed_at = utc_now()
+    content_signature = _claim_fingerprint(context, structured)
+    independence_group = mention["independence_group"]
+    if independence_group is None and mention["source_kind"] == "person_record":
+        independence_group = f"phone-record:{content_signature}"
     origin = infer_origin(
         "phone:web",
         final_url,
         collector="phone_web",
         evidence_class=EvidenceClass.DIRECT,
+        independence_key=independence_group,
     )
     if structured_match:
         location = "json-ld.telephone"
@@ -241,93 +292,115 @@ async def _emit_match(
     else:
         location = "visible-text"
     incomplete = document.parser_limited
-    await ctx.emit_finding(Finding(
-        source="phone:web",
-        category="phone",
-        label=f"Public phone mention: {title[:120]}",
-        url=candidate.url,
-        verdict=Verdict.FOUND,
-        confidence=confidence,
-        reasons=reasons,
-        signals=signals,
-        data={
-            "phone_e164": target_e164,
-            "page_title": title,
-            "context": context,
-            "structured": structured,
-            "domain": (urlsplit(final_url).hostname or "").casefold(),
-            "mention_role": mention["role"],
-            "lifecycle_markers": mention["lifecycle_markers"],
-            "discovery_source": "DuckDuckGo HTML search",
-            "verified_directly": True,
-        },
-        origin=origin,
-        extractions=[ExtractionProvenance(
-            input_artifact_key=art.key,
-            method="normalized-phone-match",
-            location=location,
-            document_url=final_url,
-            original_url=candidate.url,
-            final_url=final_url,
-            context=context,
-            extracted_value=target_e164,
-            retrieved_at=observed_at,
-            transformation_chain=["HTML parse", "phone normalization", "E.164 comparison"],
-            transformation_certainty=0.95,
-        )],
-        temporal=TemporalEvidence(
-            observed_at=observed_at,
-            status=(
-                TemporalStatus.HISTORICAL if mention["historical"] else TemporalStatus.CURRENT
-            ),
-        ),
-        completeness=Completeness.PARTIAL if incomplete else Completeness.COMPLETE,
-    ))
-    await ctx.emit_artifact(Artifact.make(
-        ArtifactType.URL,
-        candidate.url,
-        parent=art,
-        source_module="phone_web",
-        confidence=confidence,
-        origin=origin,
-    ))
-
-    if not identity_record or not structured or mention["historical"]:
-        return True
-    lead_policy = EvidencePolicy(
-        requires_corroboration=True,
-        minimum_independent_origins=2,
+    finding_policy = (
+        EvidencePolicy(requires_corroboration=True, minimum_independent_origins=2)
+        if mention["identity_candidate"]
+        else EvidencePolicy(confirmation_allowed=False, pivot_allowed=False)
     )
+    await ctx.emit_finding(
+        Finding(
+            source="phone:web",
+            category="phone",
+            label=f"Public phone mention: {title[:120]}",
+            url=final_url,
+            verdict=Verdict.FOUND,
+            confidence=confidence,
+            reasons=reasons,
+            signals=signals,
+            data={
+                "phone_e164": target_e164,
+                "page_title": title,
+                "context": context,
+                "structured": structured,
+                "domain": (urlsplit(final_url).hostname or "").casefold(),
+                "mention_role": mention["role"],
+                "source_kind": mention["source_kind"],
+                "association": mention["association"],
+                "identity_candidate": mention["identity_candidate"],
+                "content_signature": content_signature,
+                "lifecycle_markers": mention["lifecycle_markers"],
+                "discovery_source": "DuckDuckGo HTML search",
+                "verified_directly": True,
+            },
+            origin=origin,
+            extractions=[
+                ExtractionProvenance(
+                    input_artifact_key=art.key,
+                    method="normalized-phone-match",
+                    location=location,
+                    document_url=final_url,
+                    original_url=candidate.url,
+                    final_url=final_url,
+                    context=context,
+                    extracted_value=target_e164,
+                    retrieved_at=observed_at,
+                    transformation_chain=["HTML parse", "phone normalization", "E.164 comparison"],
+                    transformation_certainty=0.95,
+                )
+            ],
+            temporal=TemporalEvidence(
+                observed_at=observed_at,
+                status=(
+                    TemporalStatus.HISTORICAL if mention["historical"] else TemporalStatus.UNKNOWN
+                ),
+            ),
+            completeness=Completeness.PARTIAL if incomplete else Completeness.COMPLETE,
+            policy=finding_policy,
+        )
+    )
+    await ctx.emit_artifact(
+        Artifact.make(
+            ArtifactType.URL,
+            final_url,
+            parent=art,
+            source_module="phone_web",
+            confidence=confidence,
+            origin=origin,
+            policy=EvidencePolicy.candidate(),
+        )
+    )
+
+    if not identity_record or not structured or not mention["pivot_eligible"]:
+        return True
     if structured.get("name"):
-        await ctx.emit_artifact(Artifact.make(
-            ArtifactType.NAME,
-            structured["name"],
-            parent=art,
-            source_module="phone_web",
-            confidence=confidence,
-            policy=lead_policy,
-            origin=origin,
-        ))
+        await ctx.emit_artifact(
+            Artifact.make(
+                ArtifactType.NAME,
+                structured["name"],
+                parent=art,
+                source_module="phone_web",
+                confidence=confidence,
+                policy=EvidencePolicy.candidate(),
+                origin=origin,
+                subject_relation="same_subject",
+            )
+        )
     if structured.get("email"):
-        await ctx.emit_artifact(Artifact.make(
-            ArtifactType.EMAIL,
-            structured["email"],
-            parent=art,
-            source_module="phone_web",
-            confidence=confidence,
-            policy=lead_policy,
-            origin=origin,
-        ))
+        await ctx.emit_artifact(
+            Artifact.make(
+                ArtifactType.EMAIL,
+                structured["email"],
+                parent=art,
+                source_module="phone_web",
+                confidence=confidence,
+                policy=EvidencePolicy.corroborated(),
+                origin=origin,
+                subject_relation="same_subject",
+            )
+        )
     for url in structured.get("urls", []):
-        await ctx.emit_artifact(Artifact.make(
-            ArtifactType.ACCOUNT_PROFILE,
-            url,
-            parent=art,
-            source_module="phone_web",
-            confidence=0.80,
-            policy=lead_policy,
-            origin=origin,
-        ))
+        await ctx.emit_artifact(
+            Artifact.make(
+                ArtifactType.ACCOUNT_PROFILE,
+                url,
+                parent=art,
+                source_module="phone_web",
+                confidence=0.80,
+                policy=EvidencePolicy.corroborated(),
+                origin=origin,
+                subject_relation="same_subject",
+            )
+        )
     return True
 
 
@@ -341,42 +414,47 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
     discovery = await _discover(number, ctx)
     if not discovery.successful_queries:
         observed_at = utc_now()
-        await ctx.emit_finding(Finding(
-            source="phone:web",
-            category="phone",
-            label="Public phone mentions",
-            verdict=Verdict.UNVERIFIABLE,
-            confidence=0.0,
-            reasons=[
-                "Public-page discovery was unavailable or blocked; no absence conclusion was made."
-            ],
-            signals={"phone_e164": target_e164},
-            origin=infer_origin(
-                "phone:web",
-                _SEARCH_URL,
-                collector="phone_web",
-                evidence_class=EvidenceClass.DIRECT,
-                independence_key="search:duckduckgo",
-            ),
-            extractions=[ExtractionProvenance(
-                input_artifact_key=art.key,
-                method="bounded-exact-format-search",
-                location="search-response",
-                document_url=_SEARCH_URL,
-                retrieved_at=observed_at,
-                direct=False,
-                transformation_chain=["exact format query", "availability check"],
-                transformation_certainty=0.5,
-            )],
-            temporal=TemporalEvidence(observed_at=observed_at),
-            completeness=Completeness.PARTIAL,
-        ))
+        await ctx.emit_finding(
+            Finding(
+                source="phone:web",
+                category="phone",
+                label="Public phone mentions",
+                verdict=Verdict.UNVERIFIABLE,
+                confidence=0.0,
+                reasons=[
+                    "Public-page discovery was unavailable or blocked; no absence conclusion was made."
+                ],
+                signals={"phone_e164": target_e164},
+                origin=infer_origin(
+                    "phone:web",
+                    _SEARCH_URL,
+                    collector="phone_web",
+                    evidence_class=EvidenceClass.DIRECT,
+                    independence_key="search:duckduckgo",
+                ),
+                extractions=[
+                    ExtractionProvenance(
+                        input_artifact_key=art.key,
+                        method="bounded-exact-format-search",
+                        location="search-response",
+                        document_url=_SEARCH_URL,
+                        retrieved_at=observed_at,
+                        direct=False,
+                        transformation_chain=["exact format query", "availability check"],
+                        transformation_certainty=0.5,
+                    )
+                ],
+                temporal=TemporalEvidence(observed_at=observed_at),
+                completeness=Completeness.PARTIAL,
+            )
+        )
         return
 
     matched_pages = 0
     unavailable_pages = 0
     checked_pages = 0
     checked_extractions: list[ExtractionProvenance] = []
+    seen_final_urls: set[str] = set()
     for candidate in discovery.candidates:
         try:
             response = await ctx.client.fetch(candidate.url)
@@ -396,33 +474,82 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
             unavailable_pages += 1
             continue
         content_type = response.headers.get("content-type", "").split(";", 1)[0].casefold()
-        if content_type and not any(content_type.startswith(item) for item in _ALLOWED_CONTENT_TYPES):
+        if content_type and not any(
+            content_type.startswith(item) for item in _ALLOWED_CONTENT_TYPES
+        ):
             unavailable_pages += 1
             continue
         if response.headers.get("x-recon-body-truncated") == "1":
             unavailable_pages += 1
         final_url = response_final_url(response, candidate.url)
+        if final_url in seen_final_urls:
+            continue
+        seen_final_urls.add(final_url)
         document = parse_web_document(response.text, final_url)
         if document.parser_limited:
             unavailable_pages += 1
         checked_pages += 1
-        checked_extractions.append(ExtractionProvenance(
-            input_artifact_key=art.key,
-            method="normalized-phone-match",
-            location="retrieved-document",
-            document_url=final_url,
-            original_url=candidate.url,
-            final_url=final_url,
-            extracted_value="no matching phone observed",
-            retrieved_at=utc_now(),
-            transformation_chain=["HTML parse", "phone normalization", "E.164 comparison"],
-            transformation_certainty=0.8 if document.parser_limited else 1.0,
-        ))
-        if await _emit_match(
-            art, ctx, candidate, document, target_e164, region, final_url
-        ):
+        matched = await _emit_match(art, ctx, candidate, document, target_e164, region, final_url)
+        if matched:
             matched_pages += 1
+        else:
+            checked_extractions.append(
+                ExtractionProvenance(
+                    input_artifact_key=art.key,
+                    method="normalized-phone-match",
+                    location="retrieved-document",
+                    document_url=final_url,
+                    original_url=candidate.url,
+                    final_url=final_url,
+                    extracted_value="no matching phone observed",
+                    retrieved_at=utc_now(),
+                    transformation_chain=["HTML parse", "phone normalization", "E.164 comparison"],
+                    transformation_certainty=0.8 if document.parser_limited else 1.0,
+                )
+            )
 
+    if matched_pages and (discovery.unavailable_queries or unavailable_pages):
+        observed_at = utc_now()
+        await ctx.emit_finding(
+            Finding(
+                source="phone:web",
+                category="phone",
+                label="Additional public phone coverage",
+                verdict=Verdict.UNVERIFIABLE,
+                confidence=0.0,
+                reasons=[
+                    (
+                        f"{matched_pages} direct mention(s) were observed, but "
+                        f"{unavailable_pages} page(s) and {discovery.unavailable_queries} "
+                        "search request(s) could not be verified."
+                    ),
+                    "Observed mentions remain valid; the unavailable checks leave coverage incomplete.",
+                ],
+                signals={"phone_e164": target_e164},
+                data={
+                    "queries_attempted": min(
+                        len(_search_queries(number)), ctx.settings.phone_web_max_queries
+                    ),
+                    "candidate_pages": len(discovery.candidates),
+                    "checked_pages": checked_pages,
+                    "matched_pages": matched_pages,
+                    "unavailable_pages": unavailable_pages,
+                },
+                origin=EvidenceOrigin(
+                    collector="phone_web",
+                    operator="DuckDuckGo and directly retrieved public pages",
+                    origin="bounded-phone-web-check",
+                    evidence_class=EvidenceClass.AGGREGATED,
+                    independence_key="public_web_coverage",
+                ),
+                temporal=TemporalEvidence(observed_at=observed_at),
+                completeness=Completeness.PARTIAL,
+                policy=EvidencePolicy(
+                    confirmation_allowed=False,
+                    pivot_allowed=False,
+                ),
+            )
+        )
     if matched_pages:
         return
 
@@ -430,7 +557,7 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
     verdict = Verdict.UNVERIFIABLE if incomplete else Verdict.NOT_FOUND
     if incomplete:
         reason = (
-            f"No direct match was confirmed; {unavailable_pages} discovered page(s) and "
+            f"No direct match was observed; {unavailable_pages} discovered page(s) and "
             f"{discovery.unavailable_queries} search request(s) could not be verified."
         )
     elif discovery.candidates:
@@ -438,57 +565,69 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
     else:
         reason = "The bounded search discovered no public pages for the exact phone formats."
     observed_at = utc_now()
-    await ctx.emit_finding(Finding(
-        source="phone:web",
-        category="phone",
-        label="Public phone mentions",
-        verdict=verdict,
-        confidence=0.0,
-        reasons=[reason, "A bounded public-web check is not proof that no mention exists."],
-        signals={"phone_e164": target_e164},
-        data={
-            "queries_attempted": min(
-                len(_search_queries(number)), ctx.settings.phone_web_max_queries
+    await ctx.emit_finding(
+        Finding(
+            source="phone:web",
+            category="phone",
+            label="Public phone mentions",
+            verdict=verdict,
+            confidence=0.0,
+            reasons=[reason, "A bounded public-web check is not proof that no mention exists."],
+            signals={"phone_e164": target_e164},
+            data={
+                "queries_attempted": min(
+                    len(_search_queries(number)), ctx.settings.phone_web_max_queries
+                ),
+                "candidate_pages": len(discovery.candidates),
+                "checked_pages": checked_pages,
+                "unavailable_pages": unavailable_pages,
+            },
+            origin=EvidenceOrigin(
+                collector="phone_web",
+                operator="DuckDuckGo and directly retrieved public pages",
+                origin="bounded-phone-web-check",
+                evidence_class=EvidenceClass.AGGREGATED,
+                independence_key="public_web",
             ),
-            "candidate_pages": len(discovery.candidates),
-            "checked_pages": checked_pages,
-            "unavailable_pages": unavailable_pages,
-        },
-        origin=EvidenceOrigin(
-            collector="phone_web",
-            operator="DuckDuckGo and directly retrieved public pages",
-            origin="bounded-phone-web-check",
-            evidence_class=EvidenceClass.AGGREGATED,
-            independence_key="public_web",
-        ),
-        extractions=checked_extractions or [ExtractionProvenance(
-            input_artifact_key=art.key,
-            method="bounded-exact-format-search",
-            location="search-results",
-            document_url=_SEARCH_URL,
-            extracted_value="no candidate public page",
-            retrieved_at=observed_at,
-            direct=False,
-            transformation_chain=["exact format query", "candidate URL validation"],
-            transformation_certainty=1.0 if not incomplete else 0.5,
-        )],
-        temporal=TemporalEvidence(
-            observed_at=observed_at,
-            status=(
-                TemporalStatus.UNKNOWN if incomplete else TemporalStatus.CURRENT
+            extractions=checked_extractions
+            or [
+                ExtractionProvenance(
+                    input_artifact_key=art.key,
+                    method="bounded-exact-format-search",
+                    location="search-results",
+                    document_url=_SEARCH_URL,
+                    extracted_value="no candidate public page",
+                    retrieved_at=observed_at,
+                    direct=False,
+                    transformation_chain=["exact format query", "candidate URL validation"],
+                    transformation_certainty=1.0 if not incomplete else 0.5,
+                )
+            ],
+            temporal=TemporalEvidence(
+                observed_at=observed_at,
+                status=(TemporalStatus.UNKNOWN if incomplete else TemporalStatus.CURRENT),
             ),
-        ),
-        completeness=Completeness.PARTIAL if incomplete else Completeness.COMPLETE,
-    ))
+            completeness=Completeness.PARTIAL if incomplete else Completeness.COMPLETE,
+        )
+    )
 
 
 MODULE = Module(
     name="phone_web",
     consumes={ArtifactType.PHONE},
-    produces={ArtifactType.URL, ArtifactType.ACCOUNT_PROFILE, ArtifactType.NAME, ArtifactType.EMAIL},
+    produces={
+        ArtifactType.URL,
+        ArtifactType.ACCOUNT_PROFILE,
+        ArtifactType.NAME,
+        ArtifactType.EMAIL,
+    },
     run=_run,
     reliability_prior=0.62,
     use_cache=False,
     enabled=SETTINGS.phone_web_enabled,
     capabilities={"phone-page-discovery", "direct-phone-verification", "structured-data"},
+    evidence_policy=EvidencePolicy(
+        requires_corroboration=True,
+        minimum_independent_origins=2,
+    ),
 )

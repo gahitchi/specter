@@ -15,7 +15,9 @@ from .store import repo
 
 MAX_CANARY_AGE_DAYS = 14
 MAX_ECE = 0.10
-MAX_FALSE_POSITIVE_RATE = 0.05
+MAX_FALSE_POSITIVE_RATE = 0.01
+MIN_EVALUATION_PRECISION = 0.99
+MAX_EVALUATION_FALSE_POSITIVE_RATE = 0.01
 
 
 def _utc(value: dt.datetime) -> dt.datetime:
@@ -27,6 +29,20 @@ def _migration_head() -> str:
     migrations = Path(__file__).resolve().parent / "migrations"
     config.set_main_option("script_location", str(migrations))
     return ScriptDirectory.from_config(config).get_current_head()
+
+
+def _evaluation_meets_current_policy(evaluation: dict | None) -> bool:
+    gate = (evaluation or {}).get("gate") or {}
+    dataset = (evaluation or {}).get("dataset") or {}
+    metrics = (evaluation or {}).get("metrics") or {}
+    return bool(
+        evaluation
+        and gate.get("ready")
+        and dataset.get("provenance") == "externally_verified"
+        and metrics.get("precision", 0.0) >= MIN_EVALUATION_PRECISION
+        and metrics.get("false_positive_rate", 1.0)
+        <= MAX_EVALUATION_FALSE_POSITIVE_RATE
+    )
 
 
 def assess(db, *, now: dt.datetime | None = None) -> dict:
@@ -74,18 +90,17 @@ def assess(db, *, now: dt.datetime | None = None) -> dict:
     evaluation = evaluations[0].report if evaluations else None
     evaluation_gate = (evaluation or {}).get("gate") or {}
     evaluation_dataset = (evaluation or {}).get("dataset") or {}
-    evaluation_passed = bool(
-        evaluation
-        and evaluation_gate.get("ready")
-        and evaluation_dataset.get("provenance") == "externally_verified"
-    )
+    evaluation_metrics = (evaluation or {}).get("metrics") or {}
+    evaluation_passed = _evaluation_meets_current_policy(evaluation)
     checks.append({
         "name": "representative evaluation",
         "passed": evaluation_passed,
         "detail": (
             f"status={evaluation_gate.get('status', 'missing')}, "
             f"cases={len((evaluation or {}).get('cases') or [])}, "
-            f"provenance={evaluation_dataset.get('provenance', 'untracked')}"
+            f"provenance={evaluation_dataset.get('provenance', 'untracked')}, "
+            f"precision={evaluation_metrics.get('precision', 'n/a')}, "
+            f"FP-rate={evaluation_metrics.get('false_positive_rate', 'n/a')}"
         ),
     })
 
@@ -117,6 +132,8 @@ def assess(db, *, now: dt.datetime | None = None) -> dict:
             "maximum_canary_age_days": MAX_CANARY_AGE_DAYS,
             "maximum_ece": MAX_ECE,
             "maximum_false_positive_rate": MAX_FALSE_POSITIVE_RATE,
+            "minimum_evaluation_precision": MIN_EVALUATION_PRECISION,
+            "maximum_evaluation_false_positive_rate": MAX_EVALUATION_FALSE_POSITIVE_RATE,
         },
         "checks": checks,
     }

@@ -28,6 +28,7 @@ REQUIRED_WHEEL_FILES = {
     "recon/desktop_settings.py",
     "recon/diagnostics.py",
     "recon/evaluation.py",
+    "recon/evaluation_corpus.py",
     "recon/phone_intel.py",
     "recon/migrations/versions/20260825_0006_evaluation_runs.py",
     "recon/migrations/versions/20260814_0004_job_activity.py",
@@ -39,6 +40,7 @@ REQUIRED_WHEEL_FILES = {
 REQUIRED_SDIST_FILES = {
     "CHANGELOG.md",
     "EXTENDING.md",
+    "EVALUATION.md",
     "LICENSE",
     "PRODUCTION.md",
     "README.md",

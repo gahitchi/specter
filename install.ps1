@@ -44,18 +44,30 @@ $IconPath = (& $Specter --icon-path).Trim()
 if (-not (Test-Path -LiteralPath $IconPath)) {
     throw "Specter was installed but its application icon is missing."
 }
-$Programs = [Environment]::GetFolderPath("Programs")
-$ShortcutPath = Join-Path $Programs "Specter.lnk"
-$Shell = New-Object -ComObject WScript.Shell
-$Shortcut = $Shell.CreateShortcut($ShortcutPath)
-$Shortcut.TargetPath = $SpecterApp
-$Shortcut.WorkingDirectory = $HOME
-$Shortcut.Description = "Specter research and evidence workspace"
-$Shortcut.IconLocation = "$IconPath,0"
-$Shortcut.Save()
+
+function New-SpecterShortcut {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $Parent = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $Parent)) {
+        New-Item -ItemType Directory -Path $Parent -Force | Out-Null
+    }
+    $Shell = New-Object -ComObject WScript.Shell
+    $Shortcut = $Shell.CreateShortcut($Path)
+    $Shortcut.TargetPath = $SpecterApp
+    $Shortcut.WorkingDirectory = $HOME
+    $Shortcut.Description = "Specter research and evidence workspace"
+    $Shortcut.IconLocation = "$IconPath,0"
+    $Shortcut.Save()
+}
+
+$Programs = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
+$Desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
+New-SpecterShortcut (Join-Path $Programs "Specter.lnk")
+New-SpecterShortcut (Join-Path $Desktop "Specter.lnk")
 
 Write-Host "Specter installed successfully. While running, it checks for updates every 5 minutes."
-Write-Host "Open Specter from the Start menu, or launch it with: specter"
+Write-Host "Open Specter from the desktop, Start menu, or launch it with: specter"
 Write-Host "Apply a downloaded update with: specter --update"
 Write-Host "Uninstall with: irm https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/uninstall.ps1 | iex"
 

@@ -14,20 +14,27 @@ class _BodyTooLarge(Exception):
 
 
 class RequestBodyLimitMiddleware:
-    def __init__(self, app, max_bytes: int) -> None:
+    def __init__(
+        self,
+        app,
+        max_bytes: int,
+        path_limits: dict[str, int] | None = None,
+    ) -> None:
         self.app = app
         self.max_bytes = max_bytes
+        self.path_limits = path_limits or {}
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        max_bytes = self.path_limits.get(scope.get("path", ""), self.max_bytes)
         headers = dict(scope.get("headers", []))
         try:
             content_length = int(headers.get(b"content-length", b"0"))
         except ValueError:
-            content_length = self.max_bytes + 1
-        if content_length > self.max_bytes:
+            content_length = max_bytes + 1
+        if content_length > max_bytes:
             await JSONResponse(
                 {"error": "request body is too large"}, status_code=413
             )(scope, receive, send)
@@ -40,7 +47,7 @@ class RequestBodyLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 consumed += len(message.get("body", b""))
-                if consumed > self.max_bytes:
+                if consumed > max_bytes:
                     raise _BodyTooLarge
             return message
 

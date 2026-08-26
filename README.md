@@ -2,26 +2,29 @@
 
 Specter is a local-first OSINT research framework for authorized
 investigations. It collects public evidence, rejects common soft-404 false
-positives, follows bounded pivots, correlates confirmed observations, and stores
+positives, follows bounded pivots, correlates corroborated identity evidence, and stores
 runs for reporting and change detection.
 
 This is a pre-1.0 project. It has substantial automated test coverage, but its
 API and database schema may still change. The synthesized profile distinguishes
-operator input, confirmed facts, candidates, and unresolved gaps; it is an
+operator input, positive source observations, corroborated associations, candidates,
+and unresolved gaps; it is an
 evidence summary, not proof of identity or a claim of completeness.
 
 ## What it does
 
-- Accepts one username, email address, phone number, domain, name,
-  public profile URL, or IP address and classifies it before collection starts.
+- Accepts one or more matching usernames, email addresses, phone numbers,
+  domains, names, public profile URLs, or IP addresses and classifies them before
+  collection starts.
 - Uses control probes, site-specific rules, response similarity, and block-page
   detection instead of treating every `200 OK` as a match.
 - Traverses a typed discovery graph with strict depth, artifact, scope, and real
   outbound-request ceilings.
-- Correlates confirmed observations using explicit signals and keeps ambiguous
+- Correlates only identity-bearing, policy-eligible observations using explicit
+  unique signals and keeps ambiguous
   entity matches for review.
-- Synthesizes a unified profile with confirmed identifiers, public accounts,
-  established details, evidence coverage, confidence, and explicit gaps.
+- Synthesizes a unified profile with corroborated identifiers, observed public
+  accounts and details, evidence coverage, confidence, and explicit gaps.
 - Persists targets, runs, observations, graphs, source health, schedules, and
   change events in SQLite by default.
 - Streams a live execution graph of inputs, module processes, sanitized outbound
@@ -40,16 +43,22 @@ evidence summary, not proof of identity or a claim of completeness.
 
 Every finding has one of these verdicts:
 
-| Verdict | Meaning | Counted as a hit? |
+| Verdict | Meaning | Positive source observation? |
 | --- | --- | --- |
-| `FOUND` | Evidence met the configured confirmation threshold | Yes |
+| `FOUND` | The source established its narrow stated observation | Yes |
 | `UNCERTAIN` | Plausible but unconfirmed candidate | No |
 | `UNVERIFIABLE` | A block, challenge, or rate limit prevented a conclusion | No |
 | `NOT_FOUND` | Evidence indicates absence | No |
 | `ERROR` | The source or module failed | No |
 
-Only `FOUND` observations drive identity correlation, change detection, and hit
-counts. `UNCERTAIN` findings remain visible in the live results and reports.
+`FOUND` never means that a profile, mailbox, name, or number belongs to the
+investigation subject. Only current, identity-bearing `FOUND` observations whose
+evidence policy permits confirmation and whose unique non-seed identifier is
+repeated by the required independent origins can drive correlation. Name-only
+agreement is never enough for automatic identity confirmation. Numbering-plan metadata,
+historical mentions, directories, shared service numbers, and candidate-only
+tools remain visible without becoming identity evidence. `UNCERTAIN` findings
+also remain visible in live results and reports.
 
 During a scan, the Activity view can be left in **Focus** for a guided account
 of the investigation or switched to **Explore** for graph inspection. Journal
@@ -91,15 +100,15 @@ Arch Linux:
 curl -LsSf https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/install.sh | bash
 ```
 
-Existing installations from before the desktop release should run the matching
-installer once more. That one-time repair adds the Qt desktop components and
-operating-system menu entry; later application updates use the built-in update
-manager.
+Existing installations should run the matching installer once more after this
+upgrade. That one-time repair adds the Qt desktop components, desktop launcher,
+and operating-system menu entry; later application updates use the built-in
+update manager.
 
-The installer opens Specter as a desktop application and adds it to the Windows
-Start menu or Linux application menu. The local API, worker, and monitor are
-started and stopped with the application. A second launch brings the existing
-window forward instead of starting another copy.
+The installer opens Specter as a desktop application and creates both a desktop
+launcher and a Windows Start menu or Linux application-menu entry. The local
+API, worker, and monitor are started and stopped with the application. A second
+launch brings the existing window forward instead of starting another copy.
 
 Specter checks the GitHub branch immediately and every five minutes while it is
 running. A newer build is downloaded to a local cache without changing the
@@ -129,7 +138,7 @@ another instance is running. Rerunning the platform installer repairs the
 isolated environment in place.
 
 The Python distribution retains the compatibility name `osint-recon`. Use the
-matching one-command uninstaller to remove the application and menu entry:
+matching one-command uninstaller to remove the application and both launchers:
 
 ```powershell
 irm https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/uninstall.ps1 | iex
@@ -219,16 +228,19 @@ In production, `Run and save` reads the same graph state from the durable job so
 collection remains outside the web process.
 
 The completed workspace presents a profile synthesis before the raw evidence.
-`provided` means operator input, `confirmed` means at least one source produced a
-`FOUND` observation, and `candidate` never participates in automatic identity
-merges. Coverage marked `checked` means sources ran without confirming a fact;
-it does not prove that the fact does not exist.
+`provided` means operator input. `confirmed` means a current identity-bearing
+observation is allowed to support that claim and has satisfied independent
+corroboration; it does not merely mean that a page returned a positive response.
+`candidate` never participates in automatic identity merges. Coverage marked
+`observed` contains a positive contextual fact that cannot establish identity;
+`checked` means sources ran without confirming a fact. Neither state proves that
+an unobserved fact does not exist.
 
 Phone-led investigations add a number dossier that separates allocation
 metadata from directly verified public mentions, labels explicit person,
 organization, and directory contexts, surfaces stale or reassignment language,
-and promotes identity links only after independent corroboration. A public
-mention never establishes current ownership or control.
+and promotes unique identity links only after independent corroboration. Repeated
+names remain candidates. A public mention never establishes current ownership or control.
 
 Saved observations can be reviewed in the dashboard or from the CLI:
 
@@ -299,12 +311,17 @@ interface says so explicitly.
 
 APIs remain internal enrichment tools where they add evidence; they are not the
 product surface and their responses are not stacked into a provider checklist.
-When a directly verified phone page yields a guarded email, name, or profile
-pivot, the existing modules can use appropriate APIs to deepen that lead.
+When directly verified phone pages yield a guarded email, name, or profile lead,
+the existing modules can deepen it only after two independent, non-historical
+person records agree. Directory copies share one lineage and cannot satisfy that
+gate. Organization, service, ambiguous, and reassigned-number mentions remain
+context and never steer person-level research automatically.
 
-For public-web research, Specter submits at most two exact international-format
-queries to DuckDuckGo's HTML search, keeps at most six candidate pages, and
-fetches those pages directly through the shared rate limiter and robots policy.
+For public-web research, Specter submits at most three exact E.164,
+international, and national-format queries to DuckDuckGo's HTML search, keeps at
+most six candidate pages, and fetches those pages directly through the shared
+rate limiter and robots policy. Likely directory results are checked after more
+direct-looking public pages.
 Search snippets are discovery hints only. A `FOUND` result requires the exact
 normalized phone on the directly retrieved page. Name, email, and profile
 pivots require the exact phone and those fields to occur in the same JSON-LD
@@ -319,7 +336,7 @@ Traffic and national-number parsing can be tuned without adding providers:
 
 ```bash
 RECON_PHONE_WEB_ENABLED=true
-RECON_PHONE_WEB_MAX_QUERIES=2
+RECON_PHONE_WEB_MAX_QUERIES=3
 RECON_PHONE_WEB_MAX_PAGES=6
 RECON_PHONE_DEFAULT_REGION=IT  # optional; required for ambiguous national formats
 ```
@@ -380,6 +397,8 @@ remain visible but gated before then.
 Every module has a source contract disclosing its operator, interaction type,
 evidence class, data sent, rate policy, and terms scope. The HTTP-only free
 `ip_geo` integration is retained for compatibility but disabled by default.
+New research paths must follow the evidence-to-evaluation sequence in
+[`EXTENDING.md`](EXTENDING.md).
 
 ### Evidence Model v2
 
@@ -389,7 +408,7 @@ evidence records include:
 - the collector, upstream origin, evidence class, and independence identity;
 - the input artifact, document URL, extraction method and location,
   transformation chain, and retrieval time when available;
-- observed, first-seen, last-seen, validity, and current or historical state;
+- observed, first-seen, last-seen, validity, and current, historical, or unknown state;
 - complete, partial, or unknown collection coverage;
 - separate match-quality, source-reliability, recency, independence,
   transformation-certainty, and completeness dimensions; and
@@ -402,8 +421,9 @@ as requiring corroboration remains dormant until the same normalized artifact
 has support from the configured number of independent origins. This policy is
 enforced in the graph engine rather than left to collector convention.
 
-When the same stable claim changes between `FOUND` and `NOT_FOUND`, Specter
-creates a contradiction record and marks the earlier observation historical.
+When the same stable claim changes between `FOUND` and `NOT_FOUND`, or a still
+present page changes the identity fields it asserts, Specter creates a
+contradiction record and marks the earlier observation historical.
 It does not silently overwrite history, and historical evidence is excluded
 from current identity correlation. Contradictions are available through
 `GET /api/runs/{run_id}/contradictions`, saved reports, and the review UI.
@@ -534,11 +554,43 @@ the tool marks reports based on a small or imbalanced sample as advisory. Supply
 independently verified labels through `RECON_CALIBRATION_FILE` before using the
 results to tune thresholds.
 
-`evaluate` replays reviewed end-to-end cases and measures finding precision and
-recall, false positives, synthesized profile status, planner actions, stop
-decisions, and source-level behavior. The packaged dataset is synthetic and
-will always report `NEEDS_EVIDENCE`; supply an externally verified dataset with
-case-level verification method and date before using `--require-ready`.
+`evaluate` measures frozen, reviewed investigation snapshots: finding precision
+and recall, false positives, synthesized profile status, planner actions, stop
+decisions, and source-level behavior. It does not rerun public collection and
+must not be described as a live end-to-end benchmark. Designated canaries cover
+current source reachability separately.
+
+The desktop's **Advanced > Confidence quality > Quality review set** flow has
+two honest modes. **Private self-check** lets one operator evaluate runs using
+their own authorized information; it is useful pilot evidence but can never
+unlock release readiness. **Independent release evaluation** exports a blind
+CSV and requires an outside reviewer. Private subject data stays in the
+platform data directory and is not a packaged project asset.
+
+Related identifiers must share one non-identifying person label. A phone
+number, two emails, and several usernames owned by the same person still count
+as one subject, even when they are tested in separate runs.
+
+The same operator workflow is available from the command line:
+
+```bash
+specter evaluation-kit create --out private-kit.json --name "My private check" \
+  --mode operator_pilot
+specter evaluation-kit capture --kit private-kit.json --run 42 \
+  --case phone-positive-01 --subject-group me --category phone \
+  --authorization self_owned
+specter evaluation-kit review-sheet --kit private-kit.json --out self-check.csv
+specter evaluation-kit finalize --kit private-kit.json \
+  --review completed-review.csv --out reviewed-cases.json
+specter evaluate --dataset reviewed-cases.json --require-ready
+```
+
+Externally verified cases require an authorized subject or controlled asset, a
+reviewer independent of Specter development, a blind review, the verification
+method, and the review date. Create that workflow with `--mode independent`.
+The packaged dataset and operator pilots always report `NEEDS_EVIDENCE`. See
+[`EVALUATION.md`](https://github.com/gahitchi/osint-recon/blob/main/EVALUATION.md)
+for the sampling and review protocol.
 
 `diagnostics` produces a redacted installation report covering packaged assets,
 database revision, storage access, source contracts, and update-manager support.
@@ -578,8 +630,9 @@ RECON_ENABLE_EXPANSION=1 RECON_ML_MODEL=data/identity-model.json \
 ```
 
 Training requires at least 100 latest pair labels with at least 20 examples in
-each class. Activation additionally requires held-out false-positive rate at or
-below 0.05 and ECE at or below 0.10. The JSON model contributes an explainable
+each class. Activation additionally requires held-out precision at or above
+0.99, false-positive rate at or below 0.01, and ECE at or below 0.10. The JSON
+model contributes an explainable
 review suggestion to ambiguous entity edges; it cannot create an automatic
 merge.
 

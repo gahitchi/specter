@@ -20,7 +20,7 @@ from recon.store import get_db
 from recon.store import models_db as m
 
 
-def test_only_found_is_a_confirmed_hit():
+def test_only_found_is_a_positive_source_observation():
     found = Finding(source="s", category="c", label="found", verdict=Verdict.FOUND)
     uncertain = Finding(
         source="s", category="c", label="candidate", verdict=Verdict.UNCERTAIN

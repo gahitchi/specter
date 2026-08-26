@@ -12,12 +12,34 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from .evidence import confirmation_satisfied
 from .graph_models import Artifact, ArtifactType
 from .models import Finding, Query, Verdict
 
 ExecutionMode = Literal["automatic", "manual", "approval"]
 ActionStatus = Literal["ready", "needs_review", "blocked"]
 Priority = Literal["critical", "high", "medium", "low"]
+
+NEXT_ACTION_IDS = frozenset({
+    "refine-identifiers",
+    "review-candidates",
+    "retry-degraded-sources",
+    "corroborate-findings",
+    "resolve-conflicts",
+    "continue-bounded-scan",
+    "review-scope-pivots",
+    "review-policy-blocked-leads",
+    "review-phone-conflicts",
+    "corroborate-phone-association",
+    "monitor-confirmed-evidence",
+    "review-completed-scan",
+})
+STOP_CODES = frozenset({
+    "diminishing_returns",
+    "bounded_limit_reached",
+    "authorized_frontier_exhausted",
+    "continue_expected_value",
+})
 
 
 class NextAction(BaseModel):
@@ -87,13 +109,14 @@ def _objective(findings: list[Finding]) -> str:
     if not findings:
         return "Establish initial evidence"
     counts = Counter(finding.verdict for finding in findings)
-    if counts[Verdict.FOUND] == 0:
+    confirming = sum(confirmation_satisfied(finding, findings) for finding in findings)
+    if confirming == 0:
         if counts[Verdict.ERROR] + counts[Verdict.UNVERIFIABLE]:
             return "Recover evidence coverage"
         return "Verify the supplied identifiers"
     if counts[Verdict.UNCERTAIN] + counts[Verdict.UNVERIFIABLE]:
         return "Resolve ambiguous evidence"
-    return "Corroborate confirmed evidence"
+    return "Corroborate identity evidence"
 
 
 class InvestigationReasoner:
@@ -111,12 +134,12 @@ class InvestigationReasoner:
         seen_types: set[ArtifactType],
         findings: list[Finding],
     ) -> tuple[float, dict[str, float], list[str]]:
-        found = sum(finding.verdict == Verdict.FOUND for finding in findings)
+        found = sum(confirmation_satisfied(finding, findings) for finding in findings)
         base = float(_TYPE_VALUE.get(artifact.type, 0)) / 100.0
         reliability = float(module.reliability_prior)
-        output_value = max(
-            (_TYPE_VALUE.get(kind, 0) for kind in module.produces), default=0
-        ) / 100.0
+        output_value = (
+            max((_TYPE_VALUE.get(kind, 0) for kind in module.produces), default=0) / 100.0
+        )
         novelty = 1.0 if module.produces - seen_types else 0.0
         identity_gain = 1.0 if found and module.produces & _IDENTITY_OUTPUTS else 0.0
         seed_verification = 1.0 if not found and artifact.depth == 0 else 0.0
@@ -182,40 +205,39 @@ class InvestigationReasoner:
             )
             ranked.append((score, -index, artifact, module, dimensions, reasons))
         ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        self.decisions.append({
-            "wave": len(self.decisions) + 1,
-            "objective": _objective(findings),
-            "frontier_size": len(frontier),
-            "candidate_dispatches": len(dispatches),
-            "remaining_requests": max(0, remaining_requests),
-            "prioritized": [
-                {
-                    "artifact": artifact.key,
-                    "module": module.name,
-                    "score": score,
-                    "expected_value": dimensions,
-                    "reasons": reasons,
-                }
-                for score, _index, artifact, module, dimensions, reasons in ranked[:8]
-            ],
-            "deferred": [
-                {
-                    "artifact": artifact.key,
-                    "module": module.name,
-                    "score": score,
-                    "reason": "lower expected value than the prioritized work",
-                }
-                for score, _index, artifact, module, _dimensions, _reasons in ranked[8:16]
-            ],
-        })
+        self.decisions.append(
+            {
+                "wave": len(self.decisions) + 1,
+                "objective": _objective(findings),
+                "frontier_size": len(frontier),
+                "candidate_dispatches": len(dispatches),
+                "remaining_requests": max(0, remaining_requests),
+                "prioritized": [
+                    {
+                        "artifact": artifact.key,
+                        "module": module.name,
+                        "score": score,
+                        "expected_value": dimensions,
+                        "reasons": reasons,
+                    }
+                    for score, _index, artifact, module, dimensions, reasons in ranked[:8]
+                ],
+                "deferred": [
+                    {
+                        "artifact": artifact.key,
+                        "module": module.name,
+                        "score": score,
+                        "reason": "lower expected value than the prioritized work",
+                    }
+                    for score, _index, artifact, module, _dimensions, _reasons in ranked[8:16]
+                ],
+            }
+        )
         return [
-            (artifact, module)
-            for _score, _index, artifact, module, _dimensions, _reasons in ranked
+            (artifact, module) for _score, _index, artifact, module, _dimensions, _reasons in ranked
         ]
 
-    def complete_wave(
-        self, *, new_findings: int, new_artifacts: int, requests_used: int
-    ) -> None:
+    def complete_wave(self, *, new_findings: int, new_artifacts: int, requests_used: int) -> None:
         """Record observed yield so later decisions can detect diminishing returns."""
         if not self.decisions:
             return
@@ -307,10 +329,16 @@ class InvestigationReasoner:
     ) -> dict[str, Any]:
         verdicts = Counter(finding.verdict.value for finding in findings)
         artifact_types = Counter(artifact.type.value for artifact in artifacts)
-        found = [finding for finding in findings if finding.verdict == Verdict.FOUND]
+        observed = [finding for finding in findings if finding.verdict == Verdict.FOUND]
+        found = [
+            finding
+            for finding in observed
+            if confirmation_satisfied(finding, observed, query)
+        ]
         distinct_sources = sorted({finding.source for finding in found})
         policy_blocked = [
-            artifact for artifact in artifacts
+            artifact
+            for artifact in artifacts
             if artifact.depth > 0
             and not (artifact.data.get("promotion") or {}).get("allowed", True)
         ]
@@ -331,15 +359,20 @@ class InvestigationReasoner:
 
         if found and independent_classes >= 2:
             assessment = (
-                f"{len(found)} confirmed finding(s) are supported by "
+                f"{len(found)} identity-supporting finding(s) are backed by "
                 f"{independent_classes} independent evidence classes."
             )
         elif found:
             assessment = (
-                f"{len(found)} finding(s) are confirmed, but corroboration is still limited."
+                f"{len(found)} finding(s) can support identity, but corroboration is still limited."
+            )
+        elif observed:
+            assessment = (
+                "The scan produced positive metadata or contextual observations, but no evidence "
+                "is eligible to establish an identity link."
             )
         elif findings:
-            assessment = "The scan produced evidence, but none of it is confirmed yet."
+            assessment = "The scan produced evidence, but none can support identity yet."
         else:
             assessment = "The scan produced no evidence to support a conclusion."
 
@@ -355,7 +388,11 @@ class InvestigationReasoner:
         if errors:
             uncertainties.append(f"{errors} source check(s) failed.")
         if found and independent_classes < 2:
-            uncertainties.append("Confirmed evidence lacks independent corroboration.")
+            uncertainties.append("Identity-supporting evidence lacks independent corroboration.")
+        if observed and not found:
+            uncertainties.append(
+                "Observed metadata or page mentions do not establish a person-level association."
+            )
         if stop_reason:
             uncertainties.append(f"Traversal stopped because {stop_reason}.")
         if out_of_scope:
@@ -373,7 +410,10 @@ class InvestigationReasoner:
         def add(action: NextAction) -> None:
             if action.execution == "automatic" and not action.expected_value:
                 information_gain = {
-                    "critical": 0.9, "high": 0.8, "medium": 0.6, "low": 0.35,
+                    "critical": 0.9,
+                    "high": 0.8,
+                    "medium": 0.6,
+                    "low": 0.35,
                 }[action.priority]
                 action.expected_value = {
                     "information_gain": information_gain,
@@ -381,144 +421,201 @@ class InvestigationReasoner:
                     "cost": 0.35,
                     "risk": 0.15 if passive_only else 0.4,
                     "utility": round(
-                        0.52 * information_gain + 0.34 * action.confidence
-                        - 0.04 * 0.35 - 0.18 * (0.15 if passive_only else 0.4),
+                        0.52 * information_gain
+                        + 0.34 * action.confidence
+                        - 0.04 * 0.35
+                        - 0.18 * (0.15 if passive_only else 0.4),
                         3,
                     ),
                 }
             existing = actions.get(action.id)
-            if existing is None or _PRIORITY_RANK[action.priority] > _PRIORITY_RANK[existing.priority]:
+            if (
+                existing is None
+                or _PRIORITY_RANK[action.priority] > _PRIORITY_RANK[existing.priority]
+            ):
                 actions[action.id] = action
 
         if not found:
-            add(NextAction(
-                id="refine-identifiers",
-                title="Add a verified identifier",
-                rationale=(
-                    "No confirmed evidence was found; another known identifier can reduce ambiguity "
-                    "without broadening scope."
-                ),
-                priority="high",
-                execution="manual",
-                status="needs_review",
-                confidence=0.91,
-                requires=[
-                    "a verified username, email, domain, phone, name, public URL, or IP"
-                ],
-            ))
+            add(
+                NextAction(
+                    id="refine-identifiers",
+                    title="Add a verified identifier",
+                    rationale=(
+                        "No identity-supporting evidence was found; another known identifier can reduce ambiguity "
+                        "without broadening scope."
+                    ),
+                    priority="high",
+                    execution="manual",
+                    status="needs_review",
+                    confidence=0.91,
+                    requires=["a verified username, email, domain, phone, name, public URL, or IP"],
+                )
+            )
         if verdicts[Verdict.UNCERTAIN.value]:
-            add(NextAction(
-                id="review-candidates",
-                title="Review ambiguous candidates",
-                rationale="Candidate findings should be accepted or rejected before identity conclusions change.",
-                priority="high",
-                execution="manual",
-                status="needs_review",
-                confidence=0.95,
-                inputs=[finding.source for finding in findings if finding.verdict == Verdict.UNCERTAIN][:5],
-            ))
+            add(
+                NextAction(
+                    id="review-candidates",
+                    title="Review ambiguous candidates",
+                    rationale="Candidate findings should be accepted or rejected before identity conclusions change.",
+                    priority="high",
+                    execution="manual",
+                    status="needs_review",
+                    confidence=0.95,
+                    inputs=[
+                        finding.source
+                        for finding in findings
+                        if finding.verdict == Verdict.UNCERTAIN
+                    ][:5],
+                )
+            )
         if blocked or errors:
-            add(NextAction(
-                id="retry-degraded-sources",
-                title="Retry degraded sources",
-                rationale="Blocked and failed checks leave material gaps in evidence coverage.",
-                priority="high" if not found else "medium",
-                execution="automatic",
-                status="blocked",
-                confidence=0.88,
-                requires=["source circuit closed", "request budget available"],
-                inputs=[
-                    finding.source for finding in findings
-                    if finding.verdict in {Verdict.ERROR, Verdict.UNVERIFIABLE}
-                ][:5],
-            ))
+            add(
+                NextAction(
+                    id="retry-degraded-sources",
+                    title="Retry degraded sources",
+                    rationale="Blocked and failed checks leave material gaps in evidence coverage.",
+                    priority="high" if not found else "medium",
+                    execution="automatic",
+                    status="blocked",
+                    confidence=0.88,
+                    requires=["source circuit closed", "request budget available"],
+                    inputs=[
+                        finding.source
+                        for finding in findings
+                        if finding.verdict in {Verdict.ERROR, Verdict.UNVERIFIABLE}
+                    ][:5],
+                )
+            )
         if found and independent_classes < 2:
-            add(NextAction(
-                id="corroborate-findings",
-                title="Seek independent corroboration",
-                rationale="A separate evidence class is needed before treating the identity link as dependable.",
-                priority="high",
-                execution="automatic",
-                status="blocked",
-                confidence=0.93,
-                requires=["passive source with an independent evidence class"],
-                inputs=distinct_sources[:5],
-            ))
+            add(
+                NextAction(
+                    id="corroborate-findings",
+                    title="Seek independent corroboration",
+                    rationale="A separate evidence class is needed before treating the identity link as dependable.",
+                    priority="high",
+                    execution="automatic",
+                    status="blocked",
+                    confidence=0.93,
+                    requires=["passive source with an independent evidence class"],
+                    inputs=distinct_sources[:5],
+                )
+            )
         conflicting = [cluster for cluster in clusters if cluster.get("flags")]
         if conflicting:
-            add(NextAction(
-                id="resolve-conflicts",
-                title="Resolve identity conflicts",
-                rationale="The correlation graph contains conflicting attributes or a review boundary.",
-                priority="critical",
-                execution="manual",
-                status="needs_review",
-                confidence=0.98,
-                inputs=[str(cluster.get("id")) for cluster in conflicting[:5]],
-            ))
+            add(
+                NextAction(
+                    id="resolve-conflicts",
+                    title="Resolve identity conflicts",
+                    rationale="The correlation graph contains conflicting attributes or a review boundary.",
+                    priority="critical",
+                    execution="manual",
+                    status="needs_review",
+                    confidence=0.98,
+                    inputs=[str(cluster.get("id")) for cluster in conflicting[:5]],
+                )
+            )
         if stop_reason:
-            add(NextAction(
-                id="continue-bounded-scan",
-                title="Continue with a revised limit",
-                rationale=f"Useful work may remain because the scan stopped at {stop_reason}.",
-                priority="high",
-                execution="approval",
-                status="needs_review",
-                confidence=0.86,
-                requires=["investigator approval", "revised bounded limit"],
-            ))
+            add(
+                NextAction(
+                    id="continue-bounded-scan",
+                    title="Continue with a revised limit",
+                    rationale=f"Useful work may remain because the scan stopped at {stop_reason}.",
+                    priority="high",
+                    execution="approval",
+                    status="needs_review",
+                    confidence=0.86,
+                    requires=["investigator approval", "revised bounded limit"],
+                )
+            )
         if out_of_scope:
-            add(NextAction(
-                id="review-scope-pivots",
-                title="Review out-of-scope pivots",
-                rationale="External pivots were retained as leads but strict scope prevented collection.",
-                priority="medium",
-                execution="approval",
-                status="needs_review",
-                confidence=0.9,
-                requires=["documented authorization before scope expansion"],
-                inputs=[artifact.key for artifact in out_of_scope[:5]],
-            ))
+            add(
+                NextAction(
+                    id="review-scope-pivots",
+                    title="Review out-of-scope pivots",
+                    rationale="External pivots were retained as leads but strict scope prevented collection.",
+                    priority="medium",
+                    execution="approval",
+                    status="needs_review",
+                    confidence=0.9,
+                    requires=["documented authorization before scope expansion"],
+                    inputs=[artifact.key for artifact in out_of_scope[:5]],
+                )
+            )
         if policy_blocked:
-            add(NextAction(
-                id="review-policy-blocked-leads",
-                title="Review guarded leads",
-                rationale=(
-                    "Candidate and single-origin leads remain visible but cannot steer "
-                    "automatic collection without corroboration or review."
-                ),
-                priority="medium",
-                execution="manual",
-                status="needs_review",
-                confidence=0.96,
-                inputs=[artifact.key for artifact in policy_blocked[:5]],
-            ))
+            add(
+                NextAction(
+                    id="review-policy-blocked-leads",
+                    title="Review guarded leads",
+                    rationale=(
+                        "Candidate and single-origin leads remain visible but cannot steer "
+                        "automatic collection without corroboration or review."
+                    ),
+                    priority="medium",
+                    execution="manual",
+                    status="needs_review",
+                    confidence=0.96,
+                    inputs=[artifact.key for artifact in policy_blocked[:5]],
+                )
+            )
+        phone_research = (
+            (summary.get("profile") or {}).get("phone_research") if query.phone else None
+        )
+        phone_decision = (phone_research or {}).get("decision") or {}
+        if phone_decision.get("status") == "manual_review":
+            add(
+                NextAction(
+                    id="review-phone-conflicts",
+                    title="Review phone-association conflicts",
+                    rationale=phone_decision.get("recommended_action", ""),
+                    priority="critical",
+                    execution="manual",
+                    status="needs_review",
+                    confidence=0.98,
+                    inputs=["phone lifecycle", "conflicting names or emails"],
+                )
+            )
+        elif phone_decision.get("status") == "needs_corroboration":
+            add(
+                NextAction(
+                    id="corroborate-phone-association",
+                    title="Corroborate the phone association",
+                    rationale=phone_decision.get("recommended_action", ""),
+                    priority="high",
+                    execution="automatic",
+                    status="blocked",
+                    confidence=0.95,
+                    requires=["another independent direct public page"],
+                )
+            )
         if found and independent_classes >= 2:
-            add(NextAction(
-                id="monitor-confirmed-evidence",
-                title="Monitor confirmed evidence",
-                rationale="Corroborated evidence is suitable for bounded change monitoring.",
-                priority="low",
-                execution="automatic",
-                status="blocked",
-                confidence=0.82,
-                requires=["watchlist schedule"],
-            ))
+            add(
+                NextAction(
+                    id="monitor-confirmed-evidence",
+                    title="Monitor confirmed evidence",
+                    rationale="Corroborated evidence is suitable for bounded change monitoring.",
+                    priority="low",
+                    execution="automatic",
+                    status="blocked",
+                    confidence=0.82,
+                    requires=["watchlist schedule"],
+                )
+            )
         if not actions:
-            add(NextAction(
-                id="review-completed-scan",
-                title="Review the completed scan",
-                rationale="No automatic continuation has higher expected value than investigator review.",
-                priority="medium",
-                execution="manual",
-                status="needs_review",
-                confidence=0.8,
-            ))
+            add(
+                NextAction(
+                    id="review-completed-scan",
+                    title="Review the completed scan",
+                    rationale="No automatic continuation has higher expected value than investigator review.",
+                    priority="medium",
+                    execution="manual",
+                    status="needs_review",
+                    confidence=0.8,
+                )
+            )
 
         seed_fields = [
-            field for field in (
-                "username", "email", "phone", "domain", "name", "url", "ip_address"
-            )
+            field
+            for field in ("username", "email", "phone", "domain", "name", "url", "ip_address")
             if getattr(query, field)
         ]
         report = ReasoningReport(
@@ -528,6 +625,10 @@ class InvestigationReasoner:
             evidence_state={
                 "seed_fields": seed_fields,
                 "findings": len(findings),
+                "observed_findings": len(observed),
+                "confirmation_satisfied_findings": len(found),
+                # Kept for report-schema compatibility; semantics are now strict.
+                "confirmation_eligible_findings": len(found),
                 "verdicts": dict(sorted(verdicts.items())),
                 "artifacts": len(artifacts),
                 "artifact_types": dict(sorted(artifact_types.items())),
@@ -549,6 +650,7 @@ class InvestigationReasoner:
                     verdicts[Verdict.UNCERTAIN.value]
                     + verdicts[Verdict.UNVERIFIABLE.value]
                     + verdicts[Verdict.ERROR.value]
+                    + len(policy_blocked)
                 ),
             ),
             guardrails=[
@@ -556,7 +658,8 @@ class InvestigationReasoner:
                 "Only already-enabled modules were considered.",
                 (
                     "Only passive collection was allowed."
-                    if passive_only else "Active collection was explicitly enabled for this scan."
+                    if passive_only
+                    else "Active collection was explicitly enabled for this scan."
                 ),
                 "Reasoning changed priority, never evidence or confidence scores.",
                 "Candidate-only and uncorroborated leads did not expand automatically.",

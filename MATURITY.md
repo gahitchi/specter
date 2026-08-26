@@ -11,22 +11,35 @@ The automated gate requires:
 2. The database is at the packaged Alembic head.
 3. The latest representative calibration has at least 100 usable samples, at
    least 20 positive and 20 negative samples, ECE at or below 0.10, and a false
-   positive rate at or below 0.05.
-4. The latest evaluation uses independently verified cases, meets the minimum
-   category and phone-case coverage, and passes its verdict, profile, action,
-   stop-policy, precision, and recall thresholds.
+   positive rate at or below 0.01.
+4. The latest evaluation uses independently verified cases from at least 25
+   distinct subjects, meets the minimum category and phone-case coverage, and
+   passes its verdict, profile, action, stop-policy, precision, and recall
+   thresholds, including at least 0.99 precision and a false-positive rate at
+   or below 0.01.
 5. Every enabled network source has a passing designated canary no more than 14
    days old.
 
-Ground truth must be independently verified. Do not duplicate rows, generate
-synthetic positives, or label the tool's own verdict as truth to satisfy the
-threshold. Investigator decisions can be exported with `specter review-labels`,
-but the operator remains responsible for verification and representative
-sampling.
+Ground truth must be independently and blindly verified. Do not duplicate rows,
+generate synthetic positives, select only easy cases, or label the tool's own
+verdict as truth to satisfy the threshold. Use the private review-set workflow
+in **Advanced > Confidence quality** or `specter evaluation-kit`; its reviewer
+sheet deliberately omits Specter's decisions and scores. Investigator decisions
+can be exported with `specter review-labels`, but they are calibration candidates,
+not independent evaluation truth.
+
+When no outside reviewer or additional subjects are available, use **Private
+self-check** with one shared person label for all clues belonging to the same
+identity. This operator pilot can reveal defects and establish a personal
+baseline, but its `operator_pilot` provenance can never satisfy the expansion
+gate.
 
 Run `specter evaluate --dataset reviewed-cases.json --require-ready` to persist
-the evaluation. The packaged replay file proves only that the evaluator works;
+the evaluation. The packaged snapshot file proves only that the evaluator works;
 it is permanently marked as a functional fixture and cannot satisfy this gate.
+Frozen snapshots evaluate interpretation and decision behavior. They do not
+prove that a public source is reachable today; designated canaries cover that
+separate question. The complete protocol is in `EVALUATION.md`.
 
 Before tagging a release, also complete the manual checks in `RELEASING.md`.
 The gate is expected to remain blocked on a new installation until real labels

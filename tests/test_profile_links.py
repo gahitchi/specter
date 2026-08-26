@@ -61,6 +61,11 @@ async def test_profile_links_use_direct_visible_and_structured_links_only():
     findings, artifacts = await _run(response)
 
     assert findings[0].verdict == Verdict.FOUND
+    assert findings[0].policy.requires_corroboration is True
+    assert findings[0].signals == {
+        "email:0": "alice@example.com",
+        "username:github.com": "alice",
+    }
     assert findings[0].data["emails"] == ["alice@example.com"]
     assert findings[0].data["handles"] == {"alice": "github.com"}
     assert "decoy@example.net" not in findings[0].data["emails"]

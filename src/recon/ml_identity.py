@@ -27,6 +27,9 @@ FEATURE_NAMES = (
     "same_source",
 )
 MODEL_SCHEMA = 1
+MIN_ACTIVATION_PRECISION = 0.99
+MAX_ACTIVATION_FALSE_POSITIVE_RATE = 0.01
+MAX_ACTIVATION_ECE = 0.10
 MIN_LABELS = 100
 MIN_CLASS = 20
 
@@ -159,7 +162,7 @@ def train(session, output: str | Path) -> dict:
         class_weight="balanced", max_iter=1000, random_state=20260813
     ).fit(scaler.transform(x_train), y_train)
     probabilities = model.predict_proba(scaler.transform(x_test))[:, 1]
-    threshold = 0.80
+    threshold = 0.90
     predictions = [int(probability >= threshold) for probability in probabilities]
     false_positives = sum(p == 1 and truth == 0 for p, truth in zip(predictions, y_test))
     test_negatives = sum(truth == 0 for truth in y_test)
@@ -188,7 +191,9 @@ def train(session, output: str | Path) -> dict:
         },
         "metrics": metrics,
         "activation_eligible": (
-            metrics["false_positive_rate"] <= 0.05 and metrics["ece"] <= 0.10
+            metrics["precision"] >= MIN_ACTIVATION_PRECISION
+            and metrics["false_positive_rate"] <= MAX_ACTIVATION_FALSE_POSITIVE_RATE
+            and metrics["ece"] <= MAX_ACTIVATION_ECE
         ),
     }
     destination = Path(output).expanduser()
@@ -241,7 +246,13 @@ def load_model(path: str | Path) -> IdentityModel:
     payload = json.loads(candidate.read_text(encoding="utf-8"))
     if payload.get("schema") != MODEL_SCHEMA or payload.get("features") != list(FEATURE_NAMES):
         raise ValueError("unsupported identity model schema")
-    if not payload.get("activation_eligible"):
+    metrics = payload.get("metrics") or {}
+    meets_current_policy = (
+        metrics.get("precision", 0.0) >= MIN_ACTIVATION_PRECISION
+        and metrics.get("false_positive_rate", 1.0) <= MAX_ACTIVATION_FALSE_POSITIVE_RATE
+        and metrics.get("ece", 1.0) <= MAX_ACTIVATION_ECE
+    )
+    if not payload.get("activation_eligible") or not meets_current_policy:
         raise ValueError("identity model did not meet held-out activation thresholds")
     if len(payload.get("model", {}).get("coefficients", [])) != len(FEATURE_NAMES):
         raise ValueError("invalid identity model coefficients")

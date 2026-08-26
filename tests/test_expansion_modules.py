@@ -48,7 +48,8 @@ async def test_gitlab_exact_public_user():
                                   "state": "active", "web_url": "https://gitlab.com/alice"}]),
     )
     assert findings[0].verdict == Verdict.FOUND
-    assert findings[0].signals == {"username:gitlab": "alice"}
+    assert findings[0].signals == {"username:gitlab": "alice", "name": "Alice"}
+    assert findings[0].policy.requires_corroboration is True
     assert artifacts[0].type == ArtifactType.ACCOUNT_PROFILE
 
 

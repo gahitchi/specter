@@ -12,9 +12,8 @@ can be measured over distinct classes, not names. The mapping is declarative and
 overridable via ``RECON_INDEPENDENCE_FILE`` (JSON: ``{"token": "class"}``), in the
 same spirit as the rules engine.
 
-Phase 5a uses this in *shadow* mode (displayed, not applied); the flip to the
-official score is gated by ``Settings.confidence_independence`` once calibration
-validates it.
+Independent classes are the official basis. The connector-name calculation is
+retained as a shadow value so operators can audit the effect.
 """
 
 from __future__ import annotations
@@ -28,21 +27,63 @@ from .. import normalize
 # Token found in a source/module name -> independence class (shared upstream).
 # Username site-checks are handled separately: each platform is its own class.
 _CLASS_TOKENS: dict[str, str] = {
-    "team_cymru": "rir", "cymru": "rir", "asn": "rir",
-    "ripestat": "rir", "ip_geo": "rir", "ip-api": "rir", "abuseipdb": "rir",
+    "team_cymru": "rir",
+    "cymru": "rir",
+    "asn": "rir",
+    "ripestat": "rir",
+    "ip_geo": "rir",
+    "ip-api": "rir",
+    "abuseipdb": "rir",
     "gravatar": "gravatar",
     "github": "github",
-    "crt.sh": "ct_log", "crtsh": "ct_log",
+    "crt.sh": "ct_log",
+    "crtsh": "ct_log",
     "wayback": "web_archive",
     "commoncrawl": "web_crawl",
-    "breach": "breach", "xposed": "breach", "hibp": "breach",
-    "dns": "dns", "dns_intel": "dns", "domain": "dns",
+    "breach": "breach",
+    "xposed": "breach",
+    "hibp": "breach",
+    "dns": "dns",
+    "dns_intel": "dns",
+    "domain": "dns",
     "shodan": "shodan",
     "virustotal": "virustotal",
-    "orcid": "scholar", "openalex": "scholar", "name": "scholar",
+    "orcid": "scholar",
+    "openalex": "scholar",
+    "name": "scholar",
     "phone:web": "public_web",
     "phone": "phone_offline",
     "gravatar_hash": "gravatar",
+}
+
+# Native APIs, generic username rules, external adapters, and parsed profile
+# pages must collapse to the same upstream platform. Tokens are intentionally
+# explicit; unknown sites remain independent by host/source.
+_PLATFORM_TOKENS: dict[str, str] = {
+    "github": "github",
+    "gitlab": "gitlab",
+    "replit": "replit",
+    "dev.to": "devto",
+    "keybase": "keybase",
+    "reddit": "reddit",
+    "telegram": "telegram",
+    "t.me": "telegram",
+    "pinterest": "pinterest",
+    "gravatar": "gravatar",
+    "medium": "medium",
+    "about.me": "aboutme",
+    "hackernews": "hackernews",
+    "ycombinator": "hackernews",
+    "mastodon": "mastodon",
+    "twitch": "twitch",
+    "soundcloud": "soundcloud",
+    "pypi": "pypi",
+    "docker hub": "dockerhub",
+    "dockerhub": "dockerhub",
+    "last.fm": "lastfm",
+    "steam": "steam",
+    "bluesky": "bluesky",
+    "bsky": "bluesky",
 }
 
 
@@ -72,6 +113,9 @@ def class_of(source: str) -> str:
         return "unknown"
     if s in _overrides():
         return _overrides()[s]
+    for token, platform in _PLATFORM_TOKENS.items():
+        if token in s:
+            return platform
     prefix, _, rest = s.partition(":")
     if prefix == "username" and rest:
         return "site:" + (normalize.fold_handle(rest) or rest)
@@ -87,7 +131,15 @@ def class_of(source: str) -> str:
 def class_of_observation(observation) -> str:
     """Prefer persisted lineage and retain source-name inference for old rows."""
     explicit = str(getattr(observation, "independence_key", "") or "").strip()
-    return explicit or class_of(str(getattr(observation, "source", "") or ""))
+    if not explicit:
+        origin = getattr(observation, "origin", None)
+        explicit = str(getattr(origin, "independence_key", "") or "").strip()
+    if explicit:
+        canonical = class_of(explicit)
+        if canonical in set(_PLATFORM_TOKENS.values()):
+            return canonical
+        return explicit
+    return class_of(str(getattr(observation, "source", "") or ""))
 
 
 def independent_classes(sources) -> tuple[set[str], list[tuple[str, str]]]:
@@ -114,10 +166,12 @@ def corroboration(found_sources) -> dict:
     it does not change any score, so no calibration gate is needed.
     """
     items = list(found_sources)
-    names = sorted({
-        item if isinstance(item, str) else str(getattr(item, "source", "unknown"))
-        for item in items
-    })
+    names = sorted(
+        {
+            item if isinstance(item, str) else str(getattr(item, "source", "unknown"))
+            for item in items
+        }
+    )
     classes, redundant = independent_classes(items)
     n_classes, n_names = len(classes), len(names)
     if n_classes >= 2:
@@ -130,7 +184,7 @@ def corroboration(found_sources) -> dict:
         "label": label,
         "independent_classes": n_classes,
         "distinct_sources": n_names,
-        "inflation": round(n_names / n_classes, 2) if n_classes else 0.0,
+        "inflation": max(1.0, round(n_names / n_classes, 2)) if n_classes else 0.0,
         "classes": sorted(classes),
         "redundant": [f"{s}->{c}" for s, c in redundant],
     }

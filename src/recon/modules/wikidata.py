@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..evidence import EvidencePolicy
 from ..graph_models import Artifact, ArtifactType
 from ..models import Finding, Verdict
 from .base import Module, ModuleContext
@@ -43,6 +44,7 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
         await ctx.emit_artifact(Artifact.make(
             ArtifactType.ACCOUNT_PROFILE, url, parent=art, source_module="wikidata",
             confidence=0.45,
+            policy=EvidencePolicy.candidate(),
         ))
 
 
@@ -53,4 +55,5 @@ MODULE = Module(
     run=_run,
     reliability_prior=0.58,
     expansion=True,
+    evidence_policy=EvidencePolicy.candidate(),
 )

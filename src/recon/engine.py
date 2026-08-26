@@ -26,7 +26,7 @@ from .activity import ACTIVE_PROCESS_ID, artifact_activity_id
 from .config import SETTINGS, Settings
 from .correlate import score
 from .correlate.cluster import cluster, identity_bearing
-from .evidence import assess_promotion
+from .evidence import assess_promotion, confirmation_satisfied
 from .graph_models import Artifact, ArtifactType
 from .http_client import RateLimitedClient, RequestBudgetExceeded
 from .keys import VAULT, redact
@@ -38,13 +38,19 @@ from .reasoning import InvestigationReasoner
 # Artifact types that descend from an in-scope parent and are always safe to
 # expand in strict mode (they can't broaden the investigation's subject).
 _DESCENDANT_TYPES = {
-    ArtifactType.IP_ADDRESS, ArtifactType.ASN, ArtifactType.NETBLOCK,
-    ArtifactType.HASH, ArtifactType.BREACH, ArtifactType.ACCOUNT_PROFILE,
+    ArtifactType.IP_ADDRESS,
+    ArtifactType.ASN,
+    ArtifactType.NETBLOCK,
+    ArtifactType.HASH,
+    ArtifactType.BREACH,
+    ArtifactType.ACCOUNT_PROFILE,
     ArtifactType.URL,
 }
 _HOST_TYPES = {
-    ArtifactType.SUBDOMAIN, ArtifactType.HOSTNAME,
-    ArtifactType.MX_HOST, ArtifactType.NAMESERVER,
+    ArtifactType.SUBDOMAIN,
+    ArtifactType.HOSTNAME,
+    ArtifactType.MX_HOST,
+    ArtifactType.NAMESERVER,
 }
 
 # Frontier priority: when a request budget may cut a wave short, expand the
@@ -82,6 +88,7 @@ class ScopePolicy:
     mode: str
     seed_domains: set[str] = field(default_factory=set)
     seed_handles: set[str] = field(default_factory=set)
+    seed_emails: set[str] = field(default_factory=set)
 
     @classmethod
     def from_query(cls, query: Query, mode: str) -> "ScopePolicy":
@@ -99,28 +106,46 @@ class ScopePolicy:
             h = fold_handle(query.username)
             if h:
                 handles.add(h)
-        if query.email and "@" in query.email:
-            h = fold_handle(query.email.split("@", 1)[0])
-            if h:
-                handles.add(h)
-        return cls(mode=mode, seed_domains=domains, seed_handles=handles)
+        emails = {query.email} if query.email else set()
+        return cls(
+            mode=mode,
+            seed_domains=domains,
+            seed_handles=handles,
+            seed_emails=emails,
+        )
 
     def in_scope(self, art: Artifact) -> bool:
         if self.mode == "aggressive":
             return True
         t = art.type
+        promotion = art.data.get("promotion") or {}
+        corroborated_subject_bridge = bool(
+            art.parent_key
+            and art.data.get("subject_relation") == "same_subject"
+            and art.policy.requires_corroboration
+            and promotion.get("allowed", False)
+            and t
+            in {
+                ArtifactType.EMAIL,
+                ArtifactType.USERNAME,
+                ArtifactType.ACCOUNT_PROFILE,
+            }
+        )
+        if corroborated_subject_bridge:
+            return True
         if t in _DESCENDANT_TYPES:
             return True
         if t in _HOST_TYPES or t == ArtifactType.DOMAIN:
-            return any(art.normalized == d or art.normalized.endswith("." + d)
-                       for d in self.seed_domains)
+            return any(
+                art.normalized == d or art.normalized.endswith("." + d) for d in self.seed_domains
+            )
         if t == ArtifactType.USERNAME:
             from .normalize import fold_handle
+
             folded = fold_handle(art.normalized)
             return bool(folded and folded in self.seed_handles)
         if t == ArtifactType.EMAIL:
-            dom = art.normalized.rsplit("@", 1)[-1] if "@" in art.normalized else ""
-            return dom in self.seed_domains
+            return art.normalized in self.seed_emails
         # NAME / PHONE / LINK discovered mid-traversal: record, don't expand.
         return False
 
@@ -134,8 +159,9 @@ class _Edge:
 
 
 class GraphScanEngine:
-    def __init__(self, query: Query, settings: Settings = SETTINGS,
-                 intake: dict | None = None) -> None:
+    def __init__(
+        self, query: Query, settings: Settings = SETTINGS, intake: dict | None = None
+    ) -> None:
         self.query = query.normalized()
         self.settings = settings
         self.intake = intake
@@ -187,13 +213,17 @@ class GraphScanEngine:
         return assessment.allowed and self.scope.in_scope(art)
 
     def _register_promotion_origin(self, art: Artifact) -> None:
-        origin = str(
-            (art.origin.independence_key if art.origin is not None else "")
-            or art.data.get("independence_key")
-            or art.data.get("origin")
-            or art.source_module
-            or "unknown"
-        ).strip().casefold()
+        origin = (
+            str(
+                (art.origin.independence_key if art.origin is not None else "")
+                or art.data.get("independence_key")
+                or art.data.get("origin")
+                or art.source_module
+                or "unknown"
+            )
+            .strip()
+            .casefold()
+        )
         if origin:
             self._promotion_origins.setdefault(art.key, set()).add(origin)
 
@@ -225,9 +255,7 @@ class GraphScanEngine:
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
                     **activity,
                 }
-                payload.setdefault(
-                    "id", f"{payload.get('kind', 'activity')}:{activity_sequence}"
-                )
+                payload.setdefault("id", f"{payload.get('kind', 'activity')}:{activity_sequence}")
                 await queue.put({"type": "activity", "activity": payload})
 
         async def emit_finding(f: Finding) -> None:
@@ -240,7 +268,9 @@ class GraphScanEngine:
         async def emit_artifact(a: Artifact) -> bool:
             self.promotion_stats["attempted"] += 1
             if a.parent_key:  # always record provenance, even for dup/oob nodes
-                self.edges.append(_Edge(a.parent_key, a.key, a.source_module, a.data.get("edge", {})))
+                self.edges.append(
+                    _Edge(a.parent_key, a.key, a.source_module, a.data.get("edge", {}))
+                )
             before = len(self._promotion_origins.get(a.key, set()))
             self._register_promotion_origin(a)
             admitted = self._admit_node(a)
@@ -283,9 +313,12 @@ class GraphScanEngine:
                     activity_callback=emit_activity,
                 ) as client:
                     ctx = ModuleContext(
-                        client=client, query=self.query, settings=self.settings,
+                        client=client,
+                        query=self.query,
+                        settings=self.settings,
                         in_scope=self.scope.in_scope,
-                        _emit_finding=emit_finding, _emit_artifact=emit_artifact,
+                        _emit_finding=emit_finding,
+                        _emit_artifact=emit_artifact,
                         _emit_activity=emit_activity,
                     )
                     # Seed the frontier (seeds are always admitted + expanded).
@@ -295,20 +328,22 @@ class GraphScanEngine:
                             self._register_promotion_origin(seed)
                             self._queued.add(seed.key)
                             frontier.append(seed)
-                            await emit_activity({
-                                "kind": "artifact",
-                                "id": artifact_activity_id(seed.key),
-                                "parent_id": None,
-                                "phase": "seeded",
-                                "status": "finished",
-                                "outcome": "success",
-                                "artifact_type": seed.type.value,
-                                "label": seed.value,
-                                "module": "seed",
-                                "confidence": seed.confidence,
-                                "depth": 0,
-                                "in_scope": True,
-                            })
+                            await emit_activity(
+                                {
+                                    "kind": "artifact",
+                                    "id": artifact_activity_id(seed.key),
+                                    "parent_id": None,
+                                    "phase": "seeded",
+                                    "status": "finished",
+                                    "outcome": "success",
+                                    "artifact_type": seed.type.value,
+                                    "label": seed.value,
+                                    "module": "seed",
+                                    "confidence": seed.confidence,
+                                    "depth": 0,
+                                    "in_scope": True,
+                                }
+                            )
                     frontier.sort(key=self._priority, reverse=True)
 
                     async def run_dispatch(art: Artifact, mod, process_id: str) -> None:
@@ -323,42 +358,50 @@ class GraphScanEngine:
                             "artifact_type": art.type.value,
                             "artifact_label": art.value,
                         }
-                        await emit_activity({
-                            **base_activity,
-                            "phase": "started",
-                            "status": "running",
-                        })
+                        await emit_activity(
+                            {
+                                **base_activity,
+                                "phase": "started",
+                                "status": "running",
+                            }
+                        )
                         token = ACTIVE_PROCESS_ID.set(process_id)
                         try:
                             await mod.run_resilient(art, dispatch_ctx)
                         except RequestBudgetExceeded:
-                            await emit_activity({
-                                **base_activity,
-                                "phase": "stopped",
-                                "status": "finished",
-                                "outcome": "error",
-                                "error": "request budget exhausted",
-                            })
+                            await emit_activity(
+                                {
+                                    **base_activity,
+                                    "phase": "stopped",
+                                    "status": "finished",
+                                    "outcome": "error",
+                                    "error": "request budget exhausted",
+                                }
+                            )
                             raise
                         except Exception as exc:
-                            await emit_activity({
-                                **base_activity,
-                                "phase": "failed",
-                                "status": "finished",
-                                "outcome": "error",
-                                "error": redact(str(exc))[:300],
-                            })
+                            await emit_activity(
+                                {
+                                    **base_activity,
+                                    "phase": "failed",
+                                    "status": "finished",
+                                    "outcome": "error",
+                                    "error": redact(str(exc))[:300],
+                                }
+                            )
                             raise
                         else:
                             metrics = dispatch_ctx.activity_metrics or {}
-                            await emit_activity({
-                                **base_activity,
-                                "phase": "finished",
-                                "status": "finished",
-                                "outcome": process_outcome(metrics),
-                                "findings": len(metrics.get("verdicts", [])),
-                                "artifacts": metrics.get("artifacts", 0),
-                            })
+                            await emit_activity(
+                                {
+                                    **base_activity,
+                                    "phase": "finished",
+                                    "status": "finished",
+                                    "outcome": process_outcome(metrics),
+                                    "findings": len(metrics.get("verdicts", [])),
+                                    "artifacts": metrics.get("artifacts", 0),
+                                }
+                            )
                         finally:
                             ACTIVE_PROCESS_ID.reset(token)
 
@@ -396,19 +439,16 @@ class GraphScanEngine:
                                 self.stop_reason = self.stop_reason or "max_requests reached"
                                 stopped = True
                                 break
-                            batch = dispatches[i:i + batch_size]
+                            batch = dispatches[i : i + batch_size]
                             scheduled = []
                             for art, mod in batch:
                                 process_sequence += 1
-                                scheduled.append(run_dispatch(
-                                    art, mod, f"process:{process_sequence}"
-                                ))
-                            results = await asyncio.gather(
-                                *scheduled, return_exceptions=True
-                            )
+                                scheduled.append(
+                                    run_dispatch(art, mod, f"process:{process_sequence}")
+                                )
+                            results = await asyncio.gather(*scheduled, return_exceptions=True)
                             if client.budget_exhausted or any(
-                                isinstance(result, RequestBudgetExceeded)
-                                for result in results
+                                isinstance(result, RequestBudgetExceeded) for result in results
                             ):
                                 self.stop_reason = self.stop_reason or "max_requests reached"
                                 stopped = True
@@ -423,9 +463,7 @@ class GraphScanEngine:
                         if state["next"] and self.reasoner.low_yield_waves >= 2:
                             self.stop_reason = self.stop_reason or "diminishing returns"
                             break
-                        frontier = sorted(
-                            state["next"], key=self._priority, reverse=True
-                        )
+                        frontier = sorted(state["next"], key=self._priority, reverse=True)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - terminate the stream cleanly
@@ -450,9 +488,15 @@ class GraphScanEngine:
         if fatal_error is not None:
             return
 
-        identities = cluster([
-            f for f in collected if f.is_hit and identity_bearing(f.category)
-        ])
+        confirmed = [
+            finding
+            for finding in collected
+            if confirmation_satisfied(finding, collected, self.query)
+        ]
+        identities = cluster(
+            [finding for finding in confirmed if identity_bearing(finding.category)],
+            self.query,
+        )
         summary = score.summarize(identities)
         from .profile import synthesize_profile
 
@@ -466,7 +510,8 @@ class GraphScanEngine:
         )
         yield {"type": "summary", "summary": summary}
         out_of_scope = [
-            artifact for artifact in self.artifacts
+            artifact
+            for artifact in self.artifacts
             if artifact.depth > 0 and not self.scope.in_scope(artifact)
         ]
         self.reasoning = self.reasoner.report(
@@ -483,7 +528,9 @@ class GraphScanEngine:
         yield {
             "type": "done",
             "total": len(collected),
-            "hits": sum(1 for f in collected if f.is_hit),
+            "hits": len(confirmed),
+            "confirmed_hits": len(confirmed),
+            "observed_hits": sum(1 for finding in collected if finding.is_hit),
             "artifacts": len(self.artifacts),
             "stop_reason": self.stop_reason,
         }

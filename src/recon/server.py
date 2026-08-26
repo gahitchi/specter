@@ -39,6 +39,7 @@ from .auth import (
     revoke_session,
 )
 from .config import SETTINGS, env_value
+from .evidence import confirmation_satisfied
 from .identifiers import IdentifierKind, resolve_query
 from .keys import KNOWN_KEYS, VAULT
 from .models import Query
@@ -169,6 +170,39 @@ class PairReviewPayload(BaseModel):
     note: str = Field(default="", max_length=4000)
 
 
+class EvaluationKitCreatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=160)
+    description: str = Field(default="", max_length=1000)
+    review_mode: Literal["operator_pilot", "independent"] = "operator_pilot"
+
+
+class EvaluationKitCapturePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: int = Field(gt=0)
+    case_id: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    subject_group: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-z0-9][a-z0-9_-]*$",
+    )
+    category: str = Field(min_length=1, max_length=40, pattern=r"^[a-z0-9_-]+$")
+    authorization_basis: Literal[
+        "self_owned",
+        "documented_authorization",
+        "controlled_test_asset",
+        "public_organization_asset",
+    ]
+
+
+class EvaluationKitFinalizePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_csv: str = Field(min_length=1, max_length=900_000)
+
+
 def _modules_for_key(name: str) -> list[str]:
     used = [module.name for module in MODULES if name in module.requires_keys]
     return used or _OPTIONAL_KEY_USERS.get(name, [])
@@ -242,7 +276,11 @@ app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=list(SETTINGS.allowed_hosts),
 )
-app.add_middleware(RequestBodyLimitMiddleware, max_bytes=SETTINGS.max_request_body_bytes)
+app.add_middleware(
+    RequestBodyLimitMiddleware,
+    max_bytes=SETTINGS.max_request_body_bytes,
+    path_limits={"/api/evaluation-kit/finalize": 1_048_576},
+)
 
 
 @app.middleware("http")
@@ -337,7 +375,10 @@ def _compact_run_stats(stats: dict | None) -> dict:
     stats = stats or {}
     compact = {
         key: stats.get(key)
-        for key in ("total", "hits", "artifacts", "insights", "stop_reason")
+        for key in (
+            "total", "hits", "confirmed_hits", "observed_hits", "artifacts",
+            "insights", "stop_reason",
+        )
         if key in stats
     }
     profile = stats.get("profile") or {}
@@ -710,6 +751,13 @@ async def api_scan(request: Request, payload: ScanPayload) -> JSONResponse:
         activity_callback=capture_activity,
         intake=intake,
     )
+    findings = result["findings"]
+    profile_counts = (result["summary"].get("profile") or {}).get("counts") or {}
+    confirmed_hits = profile_counts.get("confirmed_findings")
+    if confirmed_hits is None:
+        confirmed_hits = sum(
+            confirmation_satisfied(finding, findings, query) for finding in findings
+        )
     return JSONResponse({
         "run_id": result["run_id"],
         "target_id": result["target_id"],
@@ -718,7 +766,8 @@ async def api_scan(request: Request, payload: ScanPayload) -> JSONResponse:
         "intake": intake,
         "reasoning": result["reasoning"],
         "changes": result["changes"],
-        "hits": sum(1 for finding in result["findings"] if finding.is_hit),
+        "hits": confirmed_hits,
+        "observed_hits": sum(1 for finding in findings if finding.is_hit),
         "activity": sorted(
             activity_nodes.values(), key=lambda item: int(item.get("sequence") or 0)
         ),
@@ -923,10 +972,12 @@ async def api_run_contradictions(request: Request, run_id: int) -> JSONResponse:
 async def api_review_observation(
     request: Request, observation_id: int, payload: ReviewPayload
 ) -> JSONResponse:
+    from .correlate.graph import correlate_run
     from .governance import review_observation
 
     try:
-        with get_db().session() as session:
+        db = get_db()
+        with db.session() as session:
             principal = _principal(request)
             observation = session.get(repo.m.Observation, observation_id)
             if observation is None:
@@ -940,11 +991,14 @@ async def api_review_observation(
                 reviewer=principal.username if SETTINGS.auth_required else payload.reviewer,
                 reviewer_user_id=principal.user_id,
             )
-            return JSONResponse({
+            payload_out = {
                 **_row(review, ("id", "observation_id", "run_id", "target_id",
                                 "decision", "note", "reviewer")),
                 "created_at": review.created_at.isoformat(),
-            })
+            }
+            run_id = review.run_id
+        correlate_run(db, run_id)
+        return JSONResponse(payload_out)
     except LookupError:
         return JSONResponse({"error": "observation not found"}, status_code=404)
 
@@ -1129,6 +1183,107 @@ async def api_evaluation(request: Request) -> JSONResponse:
                 for row in rows
             ],
         })
+
+
+@app.get("/api/evaluation-kit")
+async def api_evaluation_kit(request: Request) -> JSONResponse:
+    _require(_principal(request), "admin")
+    from .evaluation_corpus import default_paths, kit_status
+
+    return JSONResponse(kit_status(default_paths()["kit"]))
+
+
+@app.post("/api/evaluation-kit")
+async def api_create_evaluation_kit(
+    request: Request, payload: EvaluationKitCreatePayload
+) -> JSONResponse:
+    _require(_principal(request), "admin")
+    from .evaluation_corpus import create_kit, default_paths, kit_status
+
+    paths = default_paths()
+    try:
+        create_kit(
+            paths["kit"],
+            payload.name,
+            payload.description,
+            payload.review_mode,
+        )
+    except (OSError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return JSONResponse(kit_status(paths["kit"]), status_code=201)
+
+
+@app.post("/api/evaluation-kit/cases")
+async def api_capture_evaluation_case(
+    request: Request, payload: EvaluationKitCapturePayload
+) -> JSONResponse:
+    principal = _principal(request)
+    _require(principal, "admin")
+    from .evaluation_corpus import capture_run, default_paths, kit_status
+
+    with get_db().session() as session:
+        _can_access_run(session, principal, payload.run_id)
+    paths = default_paths()
+    try:
+        capture_run(
+            paths["kit"],
+            run_id=payload.run_id,
+            case_id=payload.case_id,
+            subject_group=payload.subject_group,
+            category=payload.category,
+            authorization_basis=payload.authorization_basis,
+        )
+    except (OSError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse(kit_status(paths["kit"]), status_code=201)
+
+
+@app.get("/api/evaluation-kit/review-sheet")
+async def api_evaluation_review_sheet(request: Request) -> FileResponse:
+    _require(_principal(request), "admin")
+    from .evaluation_corpus import default_paths, load_kit, review_sheet
+
+    paths = default_paths()
+    try:
+        kit = load_kit(paths["kit"])
+        review_sheet(paths["kit"], paths["sheet"])
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(
+        paths["sheet"],
+        media_type="text/csv",
+        filename=(
+            "specter-self-check.csv"
+            if kit.review_mode == "operator_pilot"
+            else "specter-blind-review.csv"
+        ),
+    )
+
+
+@app.post("/api/evaluation-kit/finalize")
+async def api_finalize_evaluation_kit(
+    request: Request, payload: EvaluationKitFinalizePayload
+) -> JSONResponse:
+    _require(_principal(request), "admin")
+    from .evaluation import run_evaluation
+    from .evaluation_corpus import default_paths, finalize_kit, save_review_submission
+
+    paths = default_paths()
+    try:
+        save_review_submission(paths["review"], payload.review_csv)
+        finalize_kit(paths["kit"], paths["review"], paths["dataset"])
+        report = run_evaluation(paths["dataset"])
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    with get_db().session() as session:
+        row = repo.save_evaluation(session, report)
+        evaluation_id = row.id
+    return JSONResponse({
+        "evaluation_id": evaluation_id,
+        "dataset": report["dataset"],
+        "metrics": report["metrics"],
+        "gate": report["gate"],
+    })
 
 
 @app.get("/api/diagnostics")

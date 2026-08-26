@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from urllib.parse import quote
 
+from ..evidence import EvidencePolicy
 from ..graph_models import Artifact, ArtifactType
 from ..keys import VAULT
 from ..models import Finding, Verdict
@@ -68,6 +69,7 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
                  if names else "no known breaches"],
         signals={"email": email} if names else {},
         data={"breaches": names},
+        policy=EvidencePolicy(confirmation_allowed=False, pivot_allowed=False),
     ))
     for name in names:
         await ctx.emit_artifact(Artifact.make(

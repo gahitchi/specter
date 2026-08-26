@@ -1,19 +1,17 @@
 """Confidence propagation for a resolved identity.
 
-Confidence rises with independent corroboration (distinct sources) weighted by
+Confidence rises with independent corroboration weighted by
 each source's reliability, and falls when coherence flags contradictions.
 
-Phase 5a makes the result a `ScoreBreakdown` (auditable term by term) and adds a
-*shadow* score under source-independence weighting: the breadth bonus counted by
-distinct independence *classes* rather than distinct source names, so three
-RIR-derived "confirmations" don't masquerade as three independent ones. The
-shadow value is displayed but not applied to the official `total` until
-`Settings.confidence_independence` is flipped on (after calibration).
+The official score counts distinct independence classes, so several connectors
+with the same upstream cannot masquerade as corroboration. The shadow score
+shows the legacy connector-name calculation for comparison.
 """
 
 from __future__ import annotations
 
 from ..config import SETTINGS
+from ..evidence import confirmation_satisfied
 from ..explain import ScoreBreakdown
 from ..store import models_db as m
 from ..trust import independent_classes
@@ -32,7 +30,7 @@ def entity_confidence(observations: list[m.Observation], flags: list[str],
     """Auditable identity confidence. `total` is the official score; `shadow_total`
     is the independence-weighted alternative."""
     bd = ScoreBreakdown(base=0.0)
-    hits = [o for o in observations if o.verdict in ("FOUND", "UNCERTAIN")]
+    hits = [o for o in observations if confirmation_satisfied(o, observations)]
     if not hits:
         return bd.finalize()
 
@@ -54,7 +52,7 @@ def entity_confidence(observations: list[m.Observation], flags: list[str],
         if values:
             bd.dimensions[name] = round(sum(values) / len(values), 3)
 
-    found_observations = [o for o in hits if o.verdict == "FOUND"]
+    found_observations = hits
     found_sources = [o.source for o in found_observations]
     name_distinct = len(set(found_sources))
     classes, redundant = independent_classes(found_observations)
@@ -71,12 +69,21 @@ def entity_confidence(observations: list[m.Observation], flags: list[str],
     for flag in flags:
         bd.add(f"flag:{flag}", -_FLAG_PENALTY, f"coherence flag: {flag}", layer="entity")
 
+    if len(classes) < 2 and bd.summed() > settings.identity_single_origin_cap:
+        bd.add(
+            "single_origin_cap",
+            settings.identity_single_origin_cap - bd.summed(),
+            "one independent origin cannot establish a near-certain identity",
+            layer="entity",
+        )
+
     bd.finalize()
 
-    # Shadow: the *other* breadth weighting (always the independence-aware one
-    # when the official score is still name-based), so the UI can show the delta.
+    # Shadow: the alternative breadth weighting, for audit comparison.
     shadow_breadth = name_breadth if use_classes else class_breadth
     shadow = max(0.0, min(1.0, bd.base + shadow_breadth - _FLAG_PENALTY * len(flags)))
+    if len(classes) < 2:
+        shadow = min(shadow, settings.identity_single_origin_cap)
     bd.shadow_total = round(shadow, 3)
     note = f"{len(classes)} independent class(es) vs {name_distinct} source name(s)"
     if redundant:

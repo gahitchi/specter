@@ -1700,6 +1700,14 @@ tr.NOT_FOUND {
   box-shadow: inset 0 2px var(--found);
 }
 
+.coverage-item.observed {
+  border-color: color-mix(in srgb, var(--amber) 48%, var(--line));
+}
+
+.coverage-item.observed strong {
+  color: var(--amber);
+}
+
 .coverage-item.inconclusive {
   box-shadow: inset 0 2px var(--uncertain);
 }
@@ -1822,6 +1830,38 @@ tr.NOT_FOUND {
 
 .phone-mentions {
   margin-top: 18px;
+}
+
+.phone-next-step {
+  margin-top: 14px;
+  border-left: 2px solid var(--blue);
+  padding: 9px 12px;
+  background: var(--surface-soft);
+}
+
+.phone-next-step span,
+.phone-next-step strong {
+  display: block;
+}
+
+.phone-next-step span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.phone-next-step strong {
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.phone-next-step p {
+  margin: 5px 0 0;
+  color: var(--muted-strong);
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .phone-mention {
@@ -2215,6 +2255,70 @@ tr.NOT_FOUND {
 .control-bar .status-text {
   align-self: center;
   margin-left: 4px;
+}
+
+.tool-curtain {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.tool-curtain > summary {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 750;
+  list-style: none;
+}
+
+.tool-curtain > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-curtain > summary::before {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-right: 1px solid var(--muted);
+  border-bottom: 1px solid var(--muted);
+  content: "";
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
+}
+
+.tool-curtain[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.tool-curtain > summary > span:first-child {
+  flex: 1;
+}
+
+.tool-curtain-body {
+  padding: 4px 0 14px;
+}
+
+.compact-tool-form {
+  border: 0;
+  padding: 10px 0;
+  background: transparent;
+}
+
+.review-file-button {
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.review-file-button:hover {
+  border-color: var(--muted);
+  background: var(--surface-raised);
 }
 
 .tool-form {

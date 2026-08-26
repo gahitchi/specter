@@ -1,6 +1,4 @@
-"""Phase-5a source-independence tracking: correlated sources collapse to one
-independence class, the breadth shadow reflects it, and the official score is
-unchanged until the config flag flips (shadow-first)."""
+"""Correlated source views collapse to one official independence class."""
 
 import dataclasses
 from types import SimpleNamespace
@@ -8,20 +6,32 @@ from types import SimpleNamespace
 from recon.config import SETTINGS
 from recon.correlate.confidence import entity_confidence
 from recon.trust import independence
-from recon.trust.independence import class_of, independence_breadth, independent_classes
+from recon.trust.independence import (
+    class_of,
+    class_of_observation,
+    independence_breadth,
+    independent_classes,
+)
 
 
 def _obs(source, verdict="FOUND", confidence=0.8, reliability=0.9):
     return SimpleNamespace(source=source, verdict=verdict,
-                           confidence=confidence, reliability=reliability)
+                           confidence=confidence, reliability=reliability,
+                           signals={"email": "shared@example.com"})
 
 
 def test_class_of_groups_rir_and_github():
     assert class_of("asn") == class_of("ripestat") == class_of("ip_geo") == "rir"
     assert class_of("github:user") == class_of("github") == "github"
     # Each username platform is independent.
-    assert class_of("username:GitHub") == "site:github"
+    assert class_of("username:GitHub") == "github"
+    assert class_of("profile:enrich github.com") == "github"
+    assert class_of("external:maigret:GitHub") == "github"
     assert class_of("username:Keybase") != class_of("username:GitHub")
+    old = SimpleNamespace(
+        source="profile:enrich", independence_key="site:github.com", origin=None
+    )
+    assert class_of_observation(old) == "github"
 
 
 def test_phone_web_is_independent_from_offline_numbering_metadata():
@@ -41,22 +51,23 @@ def test_independence_breadth_below_name_breadth_for_correlated():
     assert independence_breadth(sources) < name_breadth        # 0.0 < 0.16
 
 
-def test_entity_confidence_shadow_is_lower_official_unchanged():
+def test_entity_confidence_uses_independence_and_caps_one_upstream():
     obs = [_obs("asn"), _obs("ripestat"), _obs("ip_geo")]
-    bd = entity_confidence(obs, flags=[])             # flag off by default
-    # Official keeps name-based breadth; shadow uses the (smaller) class breadth.
+    bd = entity_confidence(obs, flags=[])
     assert bd.shadow_total is not None
-    assert bd.shadow_total < bd.total
-    assert any(c.term == "breadth" for c in bd.contributions)
+    assert bd.total == SETTINGS.identity_single_origin_cap
+    assert bd.shadow_total == SETTINGS.identity_single_origin_cap
+    assert next(c.delta for c in bd.contributions if c.term == "breadth") == 0.0
+    assert any(c.term == "single_origin_cap" for c in bd.contributions)
 
 
-def test_flip_applies_class_breadth_to_official():
+def test_legacy_connector_count_can_only_change_the_audit_breakdown():
     obs = [_obs("asn"), _obs("ripestat"), _obs("ip_geo")]
-    flipped = dataclasses.replace(SETTINGS, confidence_independence=True)
-    bd = entity_confidence(obs, flags=[], settings=flipped)
-    # Now the official score collapses the correlated sources (no breadth bonus).
+    legacy = dataclasses.replace(SETTINGS, confidence_independence=False)
+    bd = entity_confidence(obs, flags=[], settings=legacy)
     breadth = next(c.delta for c in bd.contributions if c.term == "breadth")
-    assert breadth == 0.0
+    assert breadth == 0.16
+    assert bd.total == SETTINGS.identity_single_origin_cap
 
 
 def test_truly_independent_sources_keep_breadth():

@@ -12,6 +12,14 @@ from typing import Awaitable, Callable
 import phonenumbers
 from phonenumbers import carrier, geocoder, timezone
 
+from ..evidence import (
+    Completeness,
+    EvidenceClass,
+    EvidencePolicy,
+    TemporalEvidence,
+    infer_origin,
+    utc_now,
+)
 from ..http_client import RateLimitedClient
 from ..models import Finding, Query, Verdict
 
@@ -47,14 +55,18 @@ async def collect(
     try:
         num = phonenumbers.parse(raw, default_region)
     except phonenumbers.NumberParseException as e:
-        await emit(Finding(
-            source="phone:parse", category="phone", label="Phone parse",
-            verdict=Verdict.ERROR,
-            reasons=[
-                "could not parse the number; include a country code or configure "
-                f"RECON_PHONE_DEFAULT_REGION: {e}"
-            ],
-        ))
+        await emit(
+            Finding(
+                source="phone:parse",
+                category="phone",
+                label="Phone parse",
+                verdict=Verdict.ERROR,
+                reasons=[
+                    "could not parse the number; include a country code or configure "
+                    f"RECON_PHONE_DEFAULT_REGION: {e}"
+                ],
+            )
+        )
         return
 
     possible = phonenumbers.is_possible_number(num)
@@ -65,11 +77,16 @@ async def collect(
             if not possible
             else "number has a possible length but is not assigned a valid numbering-plan pattern"
         )
-        await emit(Finding(
-            source="phone:validate", category="phone", label="Phone number",
-            verdict=Verdict.NOT_FOUND, confidence=0.0,
-            reasons=[reason],
-        ))
+        await emit(
+            Finding(
+                source="phone:validate",
+                category="phone",
+                label="Phone number",
+                verdict=Verdict.NOT_FOUND,
+                confidence=0.0,
+                reasons=[reason],
+            )
+        )
         return
 
     region_code = phonenumbers.region_code_for_number(num)
@@ -77,53 +94,66 @@ async def collect(
     country = geocoder.country_name_for_number(num, "en") or None
     carrier_name = carrier.name_for_number(num, "en") or None
     e164 = phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.E164)
-    await emit(Finding(
-        source="phone:validate", category="phone", label="Phone metadata",
-        verdict=Verdict.FOUND, confidence=0.85,
-        reasons=[
-            "Valid number parsed locally with libphonenumber; no lookup request was made.",
-            "Carrier, area, and line-type values are allocation metadata, not subscriber "
-            "identity, and may be stale after number portability.",
-        ],
-        signals={"phone_e164": e164},
-        data={
-            "e164": e164,
-            "international": phonenumbers.format_number(
-                num, phonenumbers.PhoneNumberFormat.INTERNATIONAL
+    await emit(
+        Finding(
+            source="phone:validate",
+            category="phone",
+            label="Phone metadata",
+            verdict=Verdict.FOUND,
+            confidence=0.85,
+            reasons=[
+                "Valid number parsed locally with libphonenumber; no lookup request was made.",
+                "Carrier, area, and line-type values are allocation metadata, not subscriber "
+                "identity, and may be stale after number portability.",
+            ],
+            signals={"phone_e164": e164},
+            data={
+                "e164": e164,
+                "international": phonenumbers.format_number(
+                    num, phonenumbers.PhoneNumberFormat.INTERNATIONAL
+                ),
+                "national": phonenumbers.format_number(
+                    num, phonenumbers.PhoneNumberFormat.NATIONAL
+                ),
+                "rfc3966": phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.RFC3966),
+                "region": description,
+                "region_code": region_code,
+                "country": country,
+                "country_code": num.country_code,
+                "national_number": str(num.national_number),
+                "carrier": carrier_name,
+                "line_type": _TYPE_NAMES.get(phonenumbers.number_type(num), "unknown"),
+                "timezones": list(timezone.time_zones_for_number(num)),
+                "possible": possible,
+                "valid_for_region": (
+                    phonenumbers.is_valid_number_for_region(num, region_code)
+                    if region_code
+                    else None
+                ),
+                "international_dialling_available": (
+                    phonenumbers.can_be_internationally_dialled(num)
+                ),
+                "number_portability_supported": (
+                    phonenumbers.is_mobile_number_portable_region(region_code)
+                    if region_code
+                    else None
+                ),
+                "geographic_area_code_length": (phonenumbers.length_of_geographical_area_code(num)),
+                "national_destination_code_length": (
+                    phonenumbers.length_of_national_destination_code(num)
+                ),
+            },
+            origin=infer_origin(
+                "phone:validate",
+                collector="phone",
+                evidence_class=EvidenceClass.OFFLINE,
+                independence_key="phone-numbering-plan",
             ),
-            "national": phonenumbers.format_number(
-                num, phonenumbers.PhoneNumberFormat.NATIONAL
+            temporal=TemporalEvidence(observed_at=utc_now()),
+            completeness=Completeness.COMPLETE,
+            policy=EvidencePolicy(
+                confirmation_allowed=False,
+                pivot_allowed=False,
             ),
-            "rfc3966": phonenumbers.format_number(
-                num, phonenumbers.PhoneNumberFormat.RFC3966
-            ),
-            "region": description,
-            "region_code": region_code,
-            "country": country,
-            "country_code": num.country_code,
-            "national_number": str(num.national_number),
-            "carrier": carrier_name,
-            "line_type": _TYPE_NAMES.get(phonenumbers.number_type(num), "unknown"),
-            "timezones": list(timezone.time_zones_for_number(num)),
-            "possible": possible,
-            "valid_for_region": (
-                phonenumbers.is_valid_number_for_region(num, region_code)
-                if region_code
-                else None
-            ),
-            "international_dialling_available": (
-                phonenumbers.can_be_internationally_dialled(num)
-            ),
-            "number_portability_supported": (
-                phonenumbers.is_mobile_number_portable_region(region_code)
-                if region_code
-                else None
-            ),
-            "geographic_area_code_length": (
-                phonenumbers.length_of_geographical_area_code(num)
-            ),
-            "national_destination_code_length": (
-                phonenumbers.length_of_national_destination_code(num)
-            ),
-        },
-    ))
+        )
+    )

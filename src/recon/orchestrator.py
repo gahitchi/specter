@@ -152,11 +152,15 @@ async def scan(query: Query, *, label: str | None = None, watchlist: bool = Fals
                 stop_reason=engine.stop_reason,
             )
             changes = diff_run(db, target_id, run_id)
+            confirmed_hits = entities["profile"]["counts"]["confirmed_findings"]
+            observed_hits = sum(1 for finding in findings if finding.is_hit)
             with db.session() as s:
                 run = s.get(repo.m.Run, run_id)
                 repo.finish_run(s, run, "done", {
                     "total": len(findings),
-                    "hits": sum(1 for f in findings if f.is_hit),
+                    "hits": confirmed_hits,
+                    "confirmed_hits": confirmed_hits,
+                    "observed_hits": observed_hits,
                     "artifacts": len(engine.artifacts),
                     "insights": len(insights),
                     "stop_reason": engine.stop_reason,

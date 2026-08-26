@@ -12,7 +12,12 @@ if ($null -eq $UvCommand) {
 }
 
 & $UvPath tool uninstall osint-recon
-$ShortcutPath = Join-Path ([Environment]::GetFolderPath("Programs")) "Specter.lnk"
-Remove-Item -LiteralPath $ShortcutPath -Force -ErrorAction SilentlyContinue
+$ShortcutPaths = @(
+    (Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)) "Specter.lnk"),
+    (Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) "Specter.lnk")
+)
+foreach ($ShortcutPath in $ShortcutPaths) {
+    Remove-Item -LiteralPath $ShortcutPath -Force -ErrorAction SilentlyContinue
+}
 
-Write-Host "Specter was removed. Investigation data and settings were left in place."
+Write-Host "Specter and its shortcuts were removed. Investigation data and settings were left in place."

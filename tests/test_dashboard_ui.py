@@ -94,7 +94,7 @@ def test_dashboard_exposes_scan_feedback_and_filters() -> None:
         "research-now-detail",
         "research-milestone",
         "discovery-feed",
-        "discovery-confirmed",
+        "discovery-observed",
         "discovery-open",
     } <= set(dashboard.ids)
     assert dashboard.filters == {
@@ -197,7 +197,7 @@ def test_dashboard_emits_native_investigation_notifications() -> None:
     script = files("recon").joinpath("web/app.js").read_text(encoding="utf-8")
 
     assert 'CustomEvent("specter:notification"' in script
-    assert 'desktopNotify("Investigation complete"' in script
+    assert 'desktopNotify(' in script and '"Investigation complete"' in script
     assert 'desktopNotify("Investigation failed"' in script
 
 

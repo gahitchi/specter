@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..evidence import EvidencePolicy
 from ..graph_models import Artifact, ArtifactType
 from ..models import Finding, Verdict
 from .base import Module, ModuleContext
@@ -33,10 +34,15 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
         source="bluesky:profile", category="username", label=f"Bluesky: {handle}",
         url=url, verdict=Verdict.FOUND, confidence=0.84,
         reasons=["actor resolved by the public Bluesky AppView API"],
-        signals={"username:bluesky": handle, **({"bluesky_did": did} if did else {})},
+        signals={
+            "username:bluesky": handle,
+            **({"bluesky_did": did} if did else {}),
+            **({"name": profile["displayName"]} if profile.get("displayName") else {}),
+        },
         data={key: profile.get(key) for key in (
             "displayName", "description", "followersCount", "followsCount", "postsCount"
         )},
+        policy=EvidencePolicy.corroborated(),
     ))
     await ctx.emit_artifact(Artifact.make(
         ArtifactType.ACCOUNT_PROFILE, url, parent=art, source_module="bluesky"

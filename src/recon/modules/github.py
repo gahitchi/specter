@@ -2,13 +2,14 @@
 
 Public GitHub API, keyless (60 req/hr). If a `github` token is present in the key
 vault it is used to lift the limit to 5000/hr — keyless-*first*, not key-required.
-The high-value pivot is harvesting commit-author emails from a user's public
-events, which links a handle to real email addresses for correlation."""
+Commit-author emails in a user's public events are retained only as contextual
+leads: push events may contain commits authored by other people."""
 
 from __future__ import annotations
 
 import json
 
+from ..evidence import EvidencePolicy
 from ..graph_models import Artifact, ArtifactType
 from ..keys import VAULT
 from ..models import Finding, Verdict
@@ -17,6 +18,7 @@ from .base import Module, ModuleContext
 
 _API = "https://api.github.com"
 _MAX_EMAILS = 10
+_ASSOCIATION_POLICY = EvidencePolicy.corroborated()
 
 
 def _headers(ctx: ModuleContext) -> dict:
@@ -53,24 +55,40 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
         url=profile, verdict=Verdict.FOUND, confidence=0.85,
         reasons=[f"{u.get('public_repos', 0)} repos, {u.get('followers', 0)} followers"
                  + (f", {u.get('name')}" if u.get("name") else "")],
-        signals={"username:github": user, **({"email": u["email"]} if u.get("email") else {})},
+        signals={
+            "username:github": user,
+            **({"email": u["email"]} if u.get("email") else {}),
+            **({"name": u["name"]} if u.get("name") else {}),
+        },
         data={k: u.get(k) for k in ("name", "company", "blog", "location", "bio",
                                     "twitter_username", "created_at")},
+        policy=_ASSOCIATION_POLICY,
     ))
     if profile:
         await ctx.emit_artifact(Artifact.make(
             ArtifactType.ACCOUNT_PROFILE, profile, parent=art, source_module="github"))
     if u.get("email"):
         await ctx.emit_artifact(Artifact.make(
-            ArtifactType.EMAIL, u["email"], parent=art, source_module="github"))
+            ArtifactType.EMAIL,
+            u["email"],
+            parent=art,
+            source_module="github",
+            confidence=0.85,
+            policy=_ASSOCIATION_POLICY,
+            subject_relation="same_subject",
+        ))
     blog = (u.get("blog") or "").strip()
     if blog:
         await ctx.emit_artifact(Artifact.make(
-            ArtifactType.LINK, blog, parent=art, source_module="github"))
+            ArtifactType.LINK, blog, parent=art, source_module="github",
+            policy=EvidencePolicy.candidate(),
+        ))
         dom = norm_domain(blog)
         if dom:
             await ctx.emit_artifact(Artifact.make(
-                ArtifactType.DOMAIN, dom, parent=art, source_module="github"))
+                ArtifactType.DOMAIN, dom, parent=art, source_module="github",
+                policy=EvidencePolicy.candidate(),
+            ))
 
     # --- Commit-author email harvest (handle -> email pivot) ---
     ev = await _get(ctx, f"/users/{user}/events/public")
@@ -90,14 +108,24 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
     if emails:
         await ctx.emit_finding(Finding(
             source="github:commits", category="email",
-            label=f"Commit emails for {user}", url=None,
+            label=f"Commit emails observed in events for {user}", url=None,
             verdict=Verdict.FOUND, confidence=0.7,
-            reasons=[f"{len(emails)} email(s) from public commit metadata"],
+            reasons=[
+                f"{len(emails)} email(s) appeared in public commit metadata.",
+                "A public event can include commits authored by other people; these emails are not attributed to the profile owner.",
+            ],
             data={"emails": sorted(emails)},
+            policy=EvidencePolicy.candidate(),
         ))
         for email in emails:
             await ctx.emit_artifact(Artifact.make(
-                ArtifactType.EMAIL, email, parent=art, source_module="github"))
+                ArtifactType.EMAIL,
+                email,
+                parent=art,
+                source_module="github",
+                confidence=0.35,
+                policy=EvidencePolicy.candidate(),
+            ))
 
 
 MODULE = Module(

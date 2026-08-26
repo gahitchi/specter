@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from recon.maturity import assess
+from recon.maturity import _evaluation_meets_current_policy, assess
 from recon.sources import Canary, load_canaries, run_canaries, validate_contracts
 from recon.store import get_db
 
@@ -57,6 +57,20 @@ def test_maturity_gate_reports_external_evidence_blockers():
     assert by_name["representative evaluation"]["passed"] is False
     assert by_name["live source canaries"]["passed"] is False
     assert result["expansion_ready"] is False
+
+
+def test_maturity_rechecks_saved_evaluation_against_current_policy():
+    report = {
+        "gate": {"ready": True},
+        "dataset": {"provenance": "externally_verified"},
+        "metrics": {"precision": 1.0, "false_positive_rate": 0.0},
+    }
+    assert _evaluation_meets_current_policy(report) is True
+
+    report["metrics"]["precision"] = 0.98
+    assert _evaluation_meets_current_policy(report) is False
+    report["metrics"] = {"precision": 1.0, "false_positive_rate": 0.02}
+    assert _evaluation_meets_current_policy(report) is False
 
 
 def test_optional_export_encryption_roundtrip():

@@ -9,16 +9,24 @@ CLI) without altering any official score.
 
 from recon.correlate.cluster import cluster
 from recon.correlate.score import summarize
+from recon.evidence import EvidenceClass, EvidenceOrigin
 from recon.models import Finding, Verdict
 from recon.trust import corroboration
 
 
 def _found(source, **signals):
-    return Finding(source=source, category="x", label=source, verdict=Verdict.FOUND,
-                   confidence=0.9, signals=signals)
+    return Finding(
+        source=source,
+        category="x",
+        label=source,
+        verdict=Verdict.FOUND,
+        confidence=0.9,
+        signals=signals,
+    )
 
 
 # ------------------------------------------------------------ the assessment
+
 
 def test_two_independent_classes_is_corroborated():
     c = corroboration(["github", "ripestat"])  # github vs rir
@@ -58,7 +66,34 @@ def test_repeated_names_dedup_before_assessment():
     assert c["label"] == "single_source"
 
 
+def test_one_collector_can_corroborate_distinct_direct_origins_without_negative_inflation():
+    findings = [
+        Finding(
+            source="phone:web",
+            category="phone",
+            label=host,
+            verdict=Verdict.FOUND,
+            confidence=0.8,
+            origin=EvidenceOrigin(
+                collector="phone_web",
+                operator=host,
+                origin=host,
+                evidence_class=EvidenceClass.DIRECT,
+                independence_key=f"site:{host}",
+            ),
+        )
+        for host in ("one.example", "two.example")
+    ]
+
+    result = corroboration(findings)
+
+    assert result["independent_classes"] == 2
+    assert result["distinct_sources"] == 1
+    assert result["inflation"] == 1.0
+
+
 # --------------------------------------------------- surfaced in the summary
+
 
 def test_summarize_attaches_corroboration_per_cluster():
     # Two FOUND findings sharing a strong signal (email) cluster into one

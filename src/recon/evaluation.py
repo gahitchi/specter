@@ -1,4 +1,10 @@
-"""Replayable end-to-end quality evaluation for investigation behavior."""
+"""Frozen-snapshot quality evaluation for investigation behavior.
+
+Collection is intentionally not rerun here: public sources change and live
+requests would make a benchmark irreproducible.  Reviewed snapshots measure
+verdict interpretation, profile synthesis, planning, and stop behavior.  Live
+source health is measured separately through designated canaries.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +21,13 @@ from .profile import synthesize_profile
 from .reasoning import InvestigationReasoner
 
 DEFAULT_DATASET = Path(__file__).resolve().parent / "data" / "evaluation_cases.json"
+
+AuthorizationBasis = Literal[
+    "self_owned",
+    "documented_authorization",
+    "controlled_test_asset",
+    "public_organization_asset",
+]
 
 
 class ExpectedClaim(BaseModel):
@@ -33,6 +46,7 @@ class EvaluationCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=100)
+    subject_group: str | None = Field(default=None, min_length=1, max_length=100)
     category: str = Field(min_length=1, max_length=40)
     query: Query
     observed_findings: list[Finding]
@@ -42,6 +56,10 @@ class EvaluationCase(BaseModel):
     expected_stop_code: str = "authorized_frontier_exhausted"
     ground_truth_method: str | None = Field(default=None, max_length=300)
     verified_at: str | None = Field(default=None, max_length=80)
+    authorization_basis: AuthorizationBasis | None = None
+    reviewer_id: str | None = Field(default=None, max_length=120)
+    reviewer_independent: bool = False
+    blind_review: bool = False
 
     @model_validator(mode="after")
     def validate_case(self) -> "EvaluationCase":
@@ -58,7 +76,9 @@ class EvaluationDataset(BaseModel):
 
     name: str = Field(min_length=1, max_length=160)
     version: int = Field(default=1, ge=1)
-    provenance: Literal["functional_fixture", "externally_verified"]
+    provenance: Literal["functional_fixture", "operator_pilot", "externally_verified"]
+    evaluation_mode: Literal["frozen_snapshot"] = "frozen_snapshot"
+    review_protocol_version: int = Field(default=1, ge=1)
     description: str = Field(default="", max_length=1000)
     cases: list[EvaluationCase]
 
@@ -67,15 +87,39 @@ class EvaluationDataset(BaseModel):
         ids = [case.id for case in self.cases]
         if len(ids) != len(set(ids)):
             raise ValueError("evaluation case ids must be unique")
-        if self.provenance == "externally_verified":
+        if self.provenance in {"operator_pilot", "externally_verified"}:
             missing = [
                 case.id for case in self.cases
-                if not case.ground_truth_method or not case.verified_at
+                if (
+                    not case.subject_group
+                    or not case.ground_truth_method
+                    or not case.verified_at
+                    or not case.authorization_basis
+                    or not case.reviewer_id
+                )
             ]
             if missing:
                 raise ValueError(
-                    "externally verified cases require ground_truth_method and verified_at: "
+                    "reviewed cases require a subject group, authorization, verification "
+                    "method, date, and reviewer identifier: "
                     + ", ".join(missing[:5])
+                )
+        if self.provenance == "externally_verified":
+            invalid = [
+                case.id for case in self.cases
+                if not case.reviewer_independent or not case.blind_review
+            ]
+            if invalid:
+                raise ValueError(
+                    "externally verified cases require independent blind review metadata: "
+                    + ", ".join(invalid[:5])
+                )
+        if self.provenance == "operator_pilot":
+            invalid = [case.id for case in self.cases if case.reviewer_independent]
+            if invalid:
+                raise ValueError(
+                    "operator pilot cases must be declared non-independent: "
+                    + ", ".join(invalid[:5])
                 )
         return self
 
@@ -100,7 +144,7 @@ def _claim_metrics(expected: list[ExpectedClaim], observed: list[Finding]) -> di
         key = f"{finding.source.casefold()}|{finding.label.casefold()}"
         if key not in predictions or finding.verdict == Verdict.FOUND:
             predictions[key] = finding.verdict
-    tp = fp = tn = fn = exact = 0
+    tp = fp = tn = fn = exact = indeterminate = 0
     expected_keys = {claim.key for claim in expected}
     for claim in expected:
         predicted = predictions.get(claim.key)
@@ -115,14 +159,28 @@ def _claim_metrics(expected: list[ExpectedClaim], observed: list[Finding]) -> di
             fn += 1
         elif predicted_present:
             fp += 1
-        else:
+        elif predicted_value == Verdict.NOT_FOUND.value:
             tn += 1
+        else:
+            indeterminate += 1
+        if predicted_value not in {Verdict.FOUND.value, Verdict.NOT_FOUND.value}:
+            indeterminate += int(expected_present)
         exact += predicted is not None and predicted_value == claim.verdict
-    fp += sum(
+    unsupported_positive = sum(
         key not in expected_keys and verdict == Verdict.FOUND
         for key, verdict in predictions.items()
     )
-    return {"tp": tp, "fp": fp, "tn": tn, "fn": fn, "exact": exact}
+    return {
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+        "exact": exact,
+        "indeterminate": indeterminate,
+        "unsupported_positive": unsupported_positive,
+        "expected_positives": sum(claim.verdict == "FOUND" for claim in expected),
+        "expected_negatives": sum(claim.verdict == "NOT_FOUND" for claim in expected),
+    }
 
 
 def _ratio(numerator: int, denominator: int) -> float:
@@ -135,6 +193,9 @@ def evaluate_dataset(dataset: EvaluationDataset, dataset_sha256: str = "") -> di
     case_results = []
     action_expected = action_matched = profile_matches = stop_matches = 0
     categories = Counter()
+    subject_groups = Counter(
+        case.subject_group for case in dataset.cases if case.subject_group
+    )
 
     for case in dataset.cases:
         categories[case.category] += 1
@@ -198,71 +259,110 @@ def evaluate_dataset(dataset: EvaluationDataset, dataset_sha256: str = "") -> di
             },
         })
 
-    claims_n = totals["tp"] + totals["fp"] + totals["tn"] + totals["fn"]
-    positives = totals["tp"] + totals["fn"]
-    negatives = totals["tn"] + totals["fp"]
+    unsupported_positive = totals["unsupported_positive"]
+    false_positives = totals["fp"] + unsupported_positive
+    expected_claims = totals["expected_positives"] + totals["expected_negatives"]
+    claims_n = expected_claims + unsupported_positive
+    positives = totals["expected_positives"]
+    negatives = totals["expected_negatives"]
     metrics = {
         "claims": claims_n,
         "positives": positives,
         "negatives": negatives,
-        "precision": _ratio(totals["tp"], totals["tp"] + totals["fp"]),
+        "precision": _ratio(totals["tp"], totals["tp"] + false_positives),
         "recall": _ratio(totals["tp"], positives),
-        "false_positive_rate": _ratio(totals["fp"], negatives),
+        "false_positive_rate": _ratio(totals["fp"], totals["fp"] + totals["tn"]),
+        "decision_coverage": _ratio(expected_claims - totals["indeterminate"], expected_claims),
+        "unsupported_positive_claims": unsupported_positive,
         "verdict_accuracy": _ratio(totals["exact"], claims_n),
         "profile_accuracy": _ratio(profile_matches, len(dataset.cases)),
         "action_recall": _ratio(action_matched, action_expected) if action_expected else 1.0,
         "stop_accuracy": _ratio(stop_matches, len(dataset.cases)),
-        "confusion": {key: totals[key] for key in ("tp", "fp", "tn", "fn")},
+        "confusion": {
+            "tp": totals["tp"],
+            "fp": false_positives,
+            "tn": totals["tn"],
+            "fn": totals["fn"],
+            "indeterminate": totals["indeterminate"],
+        },
     }
     sample_requirements = {
         "cases": 50,
+        "subjects": 25,
         "positives": 15,
         "negatives": 15,
         "categories": 3,
         "phone_cases": 10,
     }
     performance_requirements = {
-        "precision": 0.95,
+        "precision": 0.99,
         "recall": 0.85,
         "verdict_accuracy": 0.85,
         "profile_accuracy": 0.9,
         "action_recall": 0.9,
         "stop_accuracy": 0.9,
+        "decision_coverage": 0.95,
     }
+    maximum_requirements = {"false_positive_rate": 0.01}
     sample_actual = {
         "cases": len(dataset.cases),
+        "subjects": len(subject_groups),
         "positives": positives,
         "negatives": negatives,
         "categories": len(categories),
         "phone_cases": categories["phone"],
     }
     reasons = []
-    if dataset.provenance != "externally_verified":
+    if dataset.provenance == "functional_fixture":
         reasons.append("The packaged dataset is a functional fixture, not real calibration evidence.")
+    elif dataset.provenance == "operator_pilot":
+        reasons.append(
+            "The operator pilot is useful engineering evidence, but it is not independent "
+            "accuracy evidence."
+        )
     for key, minimum in sample_requirements.items():
         if sample_actual[key] < minimum:
             reasons.append(f"{key} requires at least {minimum}; dataset has {sample_actual[key]}.")
     for key, minimum in performance_requirements.items():
         if metrics[key] < minimum:
             reasons.append(f"{key} requires {minimum:.0%}; measured {metrics[key]:.0%}.")
+    for key, maximum in maximum_requirements.items():
+        if metrics[key] > maximum:
+            reasons.append(
+                f"{key} must be at most {maximum:.0%}; measured {metrics[key]:.0%}."
+            )
     ready = not reasons
     return {
-        "version": 1,
+        "version": 2,
         "dataset": {
             "name": dataset.name,
             "version": dataset.version,
             "provenance": dataset.provenance,
             "sha256": dataset_sha256,
             "description": dataset.description,
+            "evaluation_mode": dataset.evaluation_mode,
+            "review_protocol_version": dataset.review_protocol_version,
         },
         "metrics": metrics,
         "categories": dict(sorted(categories.items())),
         "sources": {
             source: {
-                "claims": counts["tp"] + counts["fp"] + counts["tn"] + counts["fn"],
-                "precision": _ratio(counts["tp"], counts["tp"] + counts["fp"]),
+                "claims": (
+                    counts["expected_positives"]
+                    + counts["expected_negatives"]
+                    + counts["unsupported_positive"]
+                ),
+                "precision": _ratio(
+                    counts["tp"],
+                    counts["tp"] + counts["fp"] + counts["unsupported_positive"],
+                ),
                 "recall": _ratio(counts["tp"], counts["tp"] + counts["fn"]),
                 "false_positive_rate": _ratio(counts["fp"], counts["fp"] + counts["tn"]),
+                "decision_coverage": _ratio(
+                    counts["expected_positives"] + counts["expected_negatives"]
+                    - counts["indeterminate"],
+                    counts["expected_positives"] + counts["expected_negatives"],
+                ),
             }
             for source, counts in sorted(source_totals.items())
         },
@@ -272,6 +372,7 @@ def evaluate_dataset(dataset: EvaluationDataset, dataset_sha256: str = "") -> di
             "sample_requirements": sample_requirements,
             "sample_actual": sample_actual,
             "performance_requirements": performance_requirements,
+            "maximum_requirements": maximum_requirements,
             "reasons": reasons,
         },
         "cases": case_results,

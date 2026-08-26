@@ -1,13 +1,14 @@
 """Candidate-email pivot (keyless): USERNAME / NAME + a seed DOMAIN -> candidate
 email addresses, each tested against a *deterministic* existence signal (Gravatar)
-before it is asserted.
+before it is retained as a candidate.
 
 This is the classic "is jane.doe@acme.com a thing?" pivot, but kept honest: we
 generate candidates from common local-part patterns, then only emit a FOUND
 EMAIL artifact (which the engine will pivot on) when Gravatar confirms an avatar
 exists for that exact address. Candidates with no Gravatar are reported once as a
-single UNCERTAIN lead and are NOT fed back into the frontier — so the module
-multiplies real clues without manufacturing false positives or runaway recursion.
+single UNCERTAIN lead and are NOT fed back into the frontier. Even a Gravatar hit
+only proves that the generated address has an avatar; it does not prove that the
+address belongs to the researched subject, so it cannot pivot automatically.
 
 Domains come from the seed query (the investigation's own domain / email domain),
 so a username-only scan with no domain context produces nothing.
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 from .. import normalize
 from ..collectors.email import gravatar_hash
+from ..evidence import EvidencePolicy
 from ..graph_models import Artifact, ArtifactType
 from ..models import Finding, Verdict
 from .base import Module, ModuleContext
@@ -104,11 +106,13 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
                          f"'{art.normalized}' + seed domain)"],
                 signals={"email": email, "gravatar_hash": gravatar_hash(email)},
                 data={"phase": "verified"},
+                policy=EvidencePolicy.candidate(),
             ))
-            # Real, verified -> let the engine pivot on it.
+            # Retain the exact address as a graph lead without researching it.
             await ctx.emit_artifact(Artifact.make(
                 ArtifactType.EMAIL, email, parent=art, source_module="permute",
                 confidence=0.85,
+                policy=EvidencePolicy.candidate(),
             ))
         else:
             unverified.append(email)
@@ -129,4 +133,6 @@ MODULE = Module(
     produces={ArtifactType.EMAIL},
     run=_run,
     reliability_prior=0.6,
+    expansion=True,
+    evidence_policy=EvidencePolicy.candidate(),
 )

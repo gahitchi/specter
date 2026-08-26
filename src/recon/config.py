@@ -91,10 +91,12 @@ class Settings:
     found_confidence: float = 0.75
     # Below found_confidence but at/above this -> UNCERTAIN (shown, flagged).
     uncertain_confidence: float = 0.40
-    # When True, corroboration breadth is weighted by *independent source classes*
-    # rather than distinct source names (see trust/independence.py). Ships False
-    # in Phase 5a (shadow-only); flipped on once calibration validates it.
-    confidence_independence: bool = False
+    # Corroboration breadth is weighted by independent upstream source classes,
+    # not connector names. The name-counted alternative remains visible as the
+    # shadow score for comparison.
+    confidence_independence: bool = True
+    # One upstream origin cannot, by itself, justify near-certain identity.
+    identity_single_origin_cap: float = 0.74
 
     # Random control-probe username: prefix + this many random chars.
     control_probe_len: int = 18
@@ -125,7 +127,7 @@ class Settings:
         default_factory=lambda: _env_bool("RECON_PHONE_WEB_ENABLED", True)
     )
     phone_web_max_queries: int = field(
-        default_factory=lambda: int(os.environ.get("RECON_PHONE_WEB_MAX_QUERIES", "2"))
+        default_factory=lambda: int(os.environ.get("RECON_PHONE_WEB_MAX_QUERIES", "3"))
     )
     phone_web_max_pages: int = field(
         default_factory=lambda: int(os.environ.get("RECON_PHONE_WEB_MAX_PAGES", "6"))
@@ -156,7 +158,8 @@ class Settings:
     max_artifacts: int = 500      # total distinct artifacts admitted to the graph
     max_requests: int = 2000      # total outbound requests, including robots/redirects
     # strict  = only expand artifacts that chain back to a seed (subdomains/IPs of
-    #           seed domains, handle pivots of seed identities); external domains
+    #           seed domains, matching seed handles, or explicitly corroborated
+    #           same-subject identity bridges); external domains
     #           discovered via links are recorded but not expanded.
     # aggressive = follow external pivots too (noisier, wider).
     scope_mode: str = "strict"    # strict | aggressive
@@ -297,8 +300,8 @@ class Settings:
             or self.phone_default_region not in phonenumbers.SUPPORTED_REGIONS
         ):
             raise ValueError("RECON_PHONE_DEFAULT_REGION must be a supported ISO country code")
-        if self.phone_web_max_queries > 2 or self.phone_web_max_pages > 6:
-            raise ValueError("phone web research is capped at 2 queries and 6 pages")
+        if self.phone_web_max_queries > 3 or self.phone_web_max_pages > 6:
+            raise ValueError("phone web research is capped at 3 queries and 6 pages")
         if self.maigret_executable and (
             "\x00" in self.maigret_executable or len(self.maigret_executable) > 2048
         ):

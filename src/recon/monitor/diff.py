@@ -7,6 +7,9 @@ This is what makes long-term monitoring actionable.
 
 from __future__ import annotations
 
+from ..correlate.cluster import identity_bearing
+from ..evidence import confirmation_satisfied
+from ..models import Query
 from ..store import models_db as m
 from ..store import repo
 from ..verify.similarity import similarity_hex
@@ -19,11 +22,25 @@ def _key(o: m.Observation) -> tuple[str, str]:
 def diff_run(db, target_id: int, run_id: int) -> list[dict]:
     with db.session() as s:
         prev = repo.latest_finished_run(s, target_id, before_run_id=run_id)
-        cur_obs = [o for o in repo.observations_for_run(s, run_id, hits_only=True)]
+        target = s.get(m.Target, target_id)
+        query = Query.model_validate(target.query)
+        cur_all = repo.observations_for_run(s, run_id, hits_only=True)
+        cur_obs = [
+            observation
+            for observation in cur_all
+            if identity_bearing(observation.category)
+            and confirmation_satisfied(observation, cur_all, query)
+        ]
         if prev is None:
             return []  # first run: nothing to compare against (no false alarms)
 
-        prev_obs = repo.observations_for_run(s, prev.id, hits_only=True)
+        prev_all = repo.observations_for_run(s, prev.id, hits_only=True)
+        prev_obs = [
+            observation
+            for observation in prev_all
+            if identity_bearing(observation.category)
+            and confirmation_satisfied(observation, prev_all, query)
+        ]
         cur = {_key(o): o for o in cur_obs}
         old = {_key(o): o for o in prev_obs}
 

@@ -1,4 +1,4 @@
-"""Extract direct contact and profile links from a confirmed public profile."""
+"""Extract direct contact and profile links from an observed public profile."""
 
 from __future__ import annotations
 
@@ -180,6 +180,14 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
             "This result applies only to the retrieved public document.",
         ]
 
+    lead_policy = EvidencePolicy.corroborated()
+    signals = {
+        **{f"email:{index}": email for index, email in enumerate(emails)},
+        **{
+            f"username:{profile.host}": profile.username
+            for profile in profiles
+        },
+    }
     await ctx.emit_finding(Finding(
         source="profile:enrich",
         category="profile",
@@ -188,6 +196,7 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
         verdict=verdict,
         confidence=confidence,
         reasons=reasons,
+        signals=signals,
         data={
             "emails": emails,
             "handles": handles,
@@ -208,12 +217,9 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
             ),
         ),
         completeness=Completeness.PARTIAL if incomplete else Completeness.COMPLETE,
+        policy=lead_policy,
     ))
 
-    lead_policy = EvidencePolicy(
-        requires_corroboration=True,
-        minimum_independent_origins=2,
-    )
     for email in emails:
         await ctx.emit_artifact(Artifact.make(
             ArtifactType.EMAIL,

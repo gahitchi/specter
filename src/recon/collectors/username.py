@@ -15,6 +15,7 @@ from typing import Awaitable, Callable
 from pydantic import ValidationError
 
 from ..config import SETTINGS, Settings
+from ..evidence import EvidencePolicy
 from ..http_client import RateLimitedClient, RequestBudgetExceeded
 from ..keys import redact
 from ..models import Finding, Query, SiteRule, Verdict
@@ -133,6 +134,11 @@ async def _check_site(
         signals=signals,
         data={"status": ev.status, "title": ev.title, "final_url": ev.final_url,
               "fingerprint": ev.fingerprint, "phase": phase},
+        policy=(
+            EvidencePolicy.corroborated()
+            if verified
+            else EvidencePolicy.candidate()
+        ),
     )
 
 

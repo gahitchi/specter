@@ -16,6 +16,7 @@ from ..evidence import (
     TemporalStatus,
     default_dimensions,
     evidence_claim_key,
+    identity_signal_keys,
     infer_origin,
     utc_now,
 )
@@ -196,6 +197,25 @@ def _record_temporal_transition(
         return
     prior.temporal_status = TemporalStatus.HISTORICAL.value
     if prior.verdict == current.verdict:
+        if prior.verdict == "FOUND":
+            earlier = identity_signal_keys(prior)
+            later = identity_signal_keys(current)
+            if earlier != later and (earlier or later):
+                changed_types = sorted({key for key, _value in earlier ^ later})
+                s.add(m.ObservationContradiction(
+                    run_id=run.id,
+                    target_id=run.target_id,
+                    claim_key=current.claim_key,
+                    earlier_observation_id=prior.id,
+                    later_observation_id=current.id,
+                    kind="identity-signals-changed",
+                    severity="high",
+                    reasons=[
+                        "The source still exists but its asserted identity fields changed: "
+                        + ", ".join(changed_types),
+                        "Do not carry the earlier association forward without review.",
+                    ],
+                ))
         return
     s.add(m.ObservationContradiction(
         run_id=run.id,

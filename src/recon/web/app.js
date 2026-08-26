@@ -309,7 +309,7 @@ $("#q").addEventListener("submit", (e) => {
   setScanStatus("Researching…", "busy");
   setLiveGraphStatus("Streaming", "busy");
   liveScanFinished = false;
-  let hits = 0;
+  let observations = 0;
   es = new EventSource("/api/search?" + params.toString());
   es.onmessage = (msg) => {
     let ev;
@@ -328,15 +328,21 @@ $("#q").addEventListener("submit", (e) => {
     else if (ev.type === "finding") {
       addRow(ev.finding);
       if (ev.finding.verdict === "FOUND")
-        setScanStatus(`Researching… ${++hits} confirmed`, "busy");
+        setScanStatus(`Researching… ${++observations} positive source observation(s)`, "busy");
     } else if (ev.type === "summary") { renderSummary(ev.summary); }
     else if (ev.type === "reasoning") { renderReasoning(ev.reasoning, "#live-reasoning"); }
     else if (ev.type === "done") {
       liveScanFinished = true;
-      setScanStatus(`Done — ${ev.hits}/${ev.total} confirmed.`, "success");
-      finishLiveGraph();
+      setScanStatus(
+        `Done — ${ev.hits} identity-supporting, ${ev.observed_hits || 0} observed from ${ev.total} checks.`,
+        "success",
+      );
+      finishLiveGraph(ev);
       setScanStage("evidence");
-      desktopNotify("Investigation complete", `${ev.hits}/${ev.total} findings confirmed.`);
+      desktopNotify(
+        "Investigation complete",
+        `${ev.hits} identity-supporting finding(s); ${ev.observed_hits || 0} positive source observation(s).`,
+      );
       $("#go").disabled = false;
       es.close();
     } else if (ev.type === "error") {
@@ -390,7 +396,7 @@ async function waitForJob(jobId) {
       trace.cursor = 0;
     }
     await loadJobActivity(jobId, trace);
-    if (job.status === "done") { finishLiveGraph(); return job; }
+    if (job.status === "done") { finishLiveGraph(job.stats || {}); return job; }
     if (job.status === "error") {
       failLiveGraph(job.error || "Scan failed");
       throw new Error(job.error || "Scan failed");
@@ -428,18 +434,19 @@ $("#save").addEventListener("click", async () => {
       setScanStatus(`Queued scan #${d.job_id}`, "busy");
       const job = await waitForJob(d.job_id);
       const hits = (job.stats || {}).hits || 0;
-      setScanStatus(`Saved run #${job.run_id}: ${hits} confirmed.`, "success");
-      desktopNotify("Investigation saved", `Run #${job.run_id}: ${hits} findings confirmed.`);
+      const observed = (job.stats || {}).observed_hits || 0;
+      setScanStatus(`Saved run #${job.run_id}: ${hits} identity-supporting, ${observed} observed.`, "success");
+      desktopNotify("Investigation saved", `Run #${job.run_id}: ${hits} identity-supporting finding(s).`);
       renderProfile((job.stats || {}).profile);
       renderReasoning((job.stats || {}).reasoning, "#live-reasoning");
       setScanStage("evidence");
       return;
     }
     renderIntake(d.intake);
-    setScanStatus(`Saved run #${d.run_id}: ${d.hits} confirmed, ${d.summary.identities} identities, ${d.changes.length} change(s).`, "success");
-    desktopNotify("Investigation saved", `Run #${d.run_id}: ${d.hits} findings confirmed.`);
+    setScanStatus(`Saved run #${d.run_id}: ${d.hits} identity-supporting, ${d.observed_hits || 0} observed, ${d.summary.identities} identities.`, "success");
+    desktopNotify("Investigation saved", `Run #${d.run_id}: ${d.hits} identity-supporting finding(s).`);
     for (const activity of d.activity || []) ingestLiveActivity(activity);
-    finishLiveGraph();
+    finishLiveGraph(d);
     renderSummary(d.summary);
     renderReasoning(d.reasoning, "#live-reasoning");
     setScanStage("evidence");
@@ -459,7 +466,7 @@ function breakdownHtml(bd) {
     .map((c) => `<span class="bd-row">${sign(c.delta)} <b>${esc(c.term)}</b> — ${esc(c.reason)}</span>`).join("");
   let shadow = "";
   if (bd.shadow_total != null && bd.shadow_total !== bd.total)
-    shadow = `<span class="bd-shadow">independence-adjusted: ${bd.shadow_total.toFixed(2)}`
+    shadow = `<span class="bd-shadow">connector-name comparison: ${bd.shadow_total.toFixed(2)}`
       + (bd.shadow_note ? ` — ${esc(bd.shadow_note)}` : "") + `</span>`;
   return `<details class="why"><summary>why ${bd.total.toFixed(2)}</summary>`
     + `<div class="bd"><span class="bd-row">base ${bd.base.toFixed(2)}</span>${rows}`
@@ -537,10 +544,10 @@ function renderProfile(profile) {
   const status = ["corroborated", "partial", "unresolved"].includes(profile.status)
     ? profile.status : "unresolved";
   const coverage = (profile.coverage || []).map(item => {
-    const state = ["confirmed", "inconclusive", "checked", "not_searched"].includes(item.state)
+    const state = ["confirmed", "observed", "inconclusive", "checked", "not_searched"].includes(item.state)
       ? item.state : "not_searched";
     const detail = item.checks
-      ? `${item.confirmed || 0} confirmed · ${item.candidates || 0} candidate · ${item.checks} checks`
+      ? `${item.confirmed || 0} confirmed · ${item.observed || 0} contextual · ${item.candidates || 0} candidate · ${item.checks} checks`
       : "Not reached from this starting point";
     return `<div class="coverage-item ${state}"><strong>${esc(item.label)}</strong>`
       + `<span>${esc(detail)}</span></div>`;
@@ -560,14 +567,15 @@ function renderProfile(profile) {
     return `<div class="profile-account"><span>${esc(item.source)}</span>${value}`
       + `<span class="fact-standing ${standing}">${standing}</span></div>`;
   }).join("");
-  const detailRows = Object.entries(profile.details || {}).flatMap(([group, rows]) =>
+  const detailRows = Object.entries(profile.details || {}).flatMap(([_group, rows]) =>
     (rows || []).map(item => `<div class="profile-fact"><span>${esc(String(item.name).replaceAll("_", " "))}</span>`
-      + `<b>${esc(profileValue(item.value))}</b><span class="fact-standing">${esc(group)}</span></div>`)
+      + `<b>${esc(profileValue(item.value))}</b><span class="fact-standing ${item.standing === "confirmed" ? "confirmed" : "candidate"}">${esc(item.standing || "observed")}</span></div>`)
   ).join("");
   const gaps = (profile.gaps || []).map(item => `<li>${esc(item)}</li>`).join("");
   const phone = profile.phone_research;
   let phoneResearch = "";
   if (phone) {
+    const decision = phone.decision || {};
     const allocation = Object.entries(phone.allocation || {}).map(([key, value]) =>
       `<div class="profile-fact"><span>${esc(key.replaceAll("_", " "))}</span><b>${esc(profileValue(value))}</b><span class="fact-standing provided">allocation</span></div>`
     ).join("");
@@ -576,20 +584,29 @@ function renderProfile(profile) {
       const title = url
         ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(item.title || item.domain)}</a>`
         : `<b>${esc(item.title || item.domain || "Public mention")}</b>`;
-      return `<div class="phone-mention"><div>${title}<span class="fact-standing ${item.temporal_status === "historical" ? "candidate" : "confirmed"}">${esc(item.temporal_status || "unknown")}</span></div>`
-        + `<span>${esc(item.domain || "")}${item.role && item.role !== "unknown" ? ` · ${esc(item.role)}` : ""}</span>`
+      const association = String(item.association || "unresolved_mention").replaceAll("_", " ");
+      const standing = decision.status === "corroborated_identity_lead"
+        && item.identity_candidate && item.temporal_status !== "historical"
+        ? "confirmed" : "candidate";
+      return `<div class="phone-mention"><div>${title}<span class="fact-standing ${standing}">${esc(association)}</span></div>`
+        + `<span>${esc(item.domain || "")}${item.source_kind ? ` · ${esc(String(item.source_kind).replaceAll("_", " "))}` : ""}</span>`
         + `${item.context ? `<p>${esc(item.context)}</p>` : ""}</div>`;
     }).join("");
     const links = (phone.identity_links || []).map(item =>
       `<div class="profile-fact"><span>${esc(item.type)}</span><b>${esc(item.value)}</b><span class="fact-standing ${item.standing === "corroborated" ? "confirmed" : "candidate"}">${esc(item.standing)}</span></div>`
     ).join("");
     const lifecycle = phone.lifecycle || {};
+    const decisionStatus = String(decision.status || "unresolved").replaceAll("_", " ");
+    const nextStep = decision.recommended_action
+      ? `<div class="phone-next-step"><span>Next justified step</span><strong>${esc(decisionStatus)}</strong><p>${esc(decision.recommended_action)}</p></div>`
+      : "";
     phoneResearch = `<section class="profile-section phone-dossier"><div class="phone-dossier-head"><div><span class="eyebrow">Phone research</span><h3>${esc(phone.number || "Number dossier")}</h3></div>`
       + `<span class="phone-lifecycle state-${esc(lifecycle.state || "unresolved")}">${esc(String(lifecycle.state || "unresolved").replaceAll("_", " "))}</span></div>`
       + `<p class="profile-note">${esc(phone.ownership_note || "")}</p>`
+      + nextStep
       + `<div class="profile-columns"><div><h4>Numbering plan</h4><div class="profile-list">${allocation || "<span class='tag'>No allocation metadata.</span>"}</div><p class="profile-note">${esc(phone.allocation_note || "")}</p></div>`
       + `<div><h4>Identity links</h4><div class="profile-list">${links || "<span class='tag'>No identity link corroborated.</span>"}</div></div></div>`
-      + `<div class="phone-mentions"><h4>Verified public mentions</h4>${mentions || "<span class='tag'>No direct mention confirmed in the bounded check.</span>"}</div>`
+      + `<div class="phone-mentions"><h4>Direct public mentions</h4>${mentions || "<span class='tag'>No direct mention was observed in the bounded check.</span>"}</div>`
       + ((lifecycle.conflicts || []).length ? `<ul class="profile-gaps">${lifecycle.conflicts.map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : "")
       + `</section>`;
   }
@@ -602,8 +619,8 @@ function renderProfile(profile) {
     + `<div class="profile-columns"><section class="profile-section"><h3>Identifiers</h3>`
     + `<div class="profile-list">${identifiers || "<span class='tag'>No identifiers established.</span>"}</div></section>`
     + `<section class="profile-section"><h3>Public accounts</h3><div class="profile-list">`
-    + `${accounts || "<span class='tag'>No account confirmed.</span>"}</div></section></div>`
-    + (detailRows ? `<section class="profile-section"><h3>Established details</h3><div class="profile-list">${detailRows}</div></section>` : "")
+    + `${accounts || "<span class='tag'>No account association was corroborated.</span>"}</div></section></div>`
+    + (detailRows ? `<section class="profile-section"><h3>Observed details</h3><div class="profile-list">${detailRows}</div></section>` : "")
     + phoneResearch
     + `<section class="profile-section"><h3>Unresolved gaps</h3><ul class="profile-gaps">`
     + `${gaps || "<li>No material gap was recorded.</li>"}</ul></section>`
@@ -670,7 +687,9 @@ function renderReasoning(report, target = "#reasoning-view") {
     + `<h3>${esc(report.objective)}</h3><p>${esc(report.assessment)}</p></div>`
     + `<div class="reasoning-confidence"><strong>${Math.round((report.confidence || 0) * 100)}%</strong><span>assessment confidence</span></div></div>`
     + `<div class="reasoning-metrics"><span><b>${esc(state.findings || 0)}</b> findings</span>`
-    + `<span><b>${esc(verdicts.FOUND || 0)}</b> confirmed</span><span><b>${esc(state.artifacts || 0)}</b> artifacts</span>`
+    + `<span><b>${esc(state.confirmation_satisfied_findings || 0)}</b> identity-supporting</span>`
+    + `<span><b>${esc(state.observed_findings || verdicts.FOUND || 0)}</b> source observations</span>`
+    + `<span><b>${esc(state.artifacts || 0)}</b> artifacts</span>`
     + `<span><b>${esc(state.independent_classes || 0)}</b> evidence classes</span></div>`
     + uncertainties + `<div class="reasoning-section-heading"><h4>Next actions</h4><span>${actions ? (report.next_actions || []).length : 0} proposed</span></div>`
     + `<div class="reasoning-actions">${actions}</div>`
@@ -703,7 +722,7 @@ function provenanceHtml(p) {
     `tool ${esc(p.tool_version)} · py ${esc(p.python)}${p.deterministic ? " · deterministic" : ""}`,
     `dataset sha ${esc((p.sites_dataset_sha256 || "").slice(0, 12))}`,
     `engine: scope ${esc(e.scope_mode)} · depth ${e.max_depth} · ${e.passive_only ? "passive" : "active"}`
-      + ` · independence ${e.confidence_independence ? "on" : "shadow"}`,
+      + ` · evidence grouping ${e.confidence_independence ? "independent classes" : "connector names"}`,
     `thresholds: FOUND≥${t.found_confidence} · merge ${t.er_merge_threshold}`,
   ];
   return `<details class="why"><summary>stamp</summary><div class="bd">`
@@ -898,6 +917,7 @@ const reducedGraphMotion = window.matchMedia("(prefers-reduced-motion: reduce)")
 const RESEARCH_PHASES = ["understand", "discover", "connect", "verify", "synthesize"];
 const researchState = {
   phaseIndex: -1,
+  observed: 0,
   confirmed: 0,
   open: 0,
   leads: 0,
@@ -1005,14 +1025,14 @@ function researchActivityCopy(activity) {
     tone: "success",
   };
   if (activity.kind === "finding") {
-    const isConfirmed = outcome === "success";
+    const isObserved = outcome === "success";
     const isOpen = ["uncertain", "unverifiable"].includes(outcome);
     return {
       phase: "verify",
-      kicker: isConfirmed ? "Evidence confirmed" : isOpen ? "Evidence needs review" : "Check resolved",
-      title: isConfirmed ? `${source} supports a finding` : `${source}: ${liveOutcomeLabel(activity)}`,
+      kicker: isObserved ? "Source observation" : isOpen ? "Evidence needs review" : "Check resolved",
+      title: isObserved ? `${source} observed a matching fact` : `${source}: ${liveOutcomeLabel(activity)}`,
       detail: activity.reason || `${activity.label || type} was evaluated against the available evidence.`,
-      tone: isConfirmed ? "success" : isOpen ? "warning" : outcome === "error" ? "error" : "neutral",
+      tone: isObserved ? "success" : isOpen ? "warning" : outcome === "error" ? "error" : "neutral",
     };
   }
   return {
@@ -1036,10 +1056,10 @@ function addDiscoveryEntry(activity, copy) {
   researchState.feedKeys.add(key);
   $("#discovery-feed-empty").hidden = true;
 
-  if (activity.kind === "finding" && outcome === "success") researchState.confirmed += 1;
+  if (activity.kind === "finding" && outcome === "success") researchState.observed += 1;
   if (activity.kind === "finding" && ["uncertain", "unverifiable"].includes(outcome)) researchState.open += 1;
   if (activity.kind === "artifact" && activity.phase === "discovered") researchState.leads += 1;
-  $("#discovery-confirmed").textContent = researchState.confirmed;
+  $("#discovery-observed").textContent = researchState.observed;
   $("#discovery-open").textContent = researchState.open;
 
   const item = document.createElement("li");
@@ -1064,8 +1084,8 @@ function addDiscoveryEntry(activity, copy) {
 
   if (researchState.leads === 1)
     showResearchMilestone("First new lead discovered");
-  if ([1, 3, 5, 10].includes(researchState.confirmed))
-    showResearchMilestone(`${researchState.confirmed} finding${researchState.confirmed === 1 ? "" : "s"} confirmed`);
+  if ([1, 3, 5, 10].includes(researchState.observed))
+    showResearchMilestone(`${researchState.observed} positive source observation${researchState.observed === 1 ? "" : "s"}`);
 }
 
 function updateResearchStory(activity) {
@@ -1611,7 +1631,8 @@ function resetLiveGraph() {
   liveGraph.viewTarget = null; liveGraph.followedId = null; liveGraph.visibleIds = null;
   liveGraph.userInteracted = false;
   liveGraph.paused = false;
-  researchState.phaseIndex = -1; researchState.confirmed = 0; researchState.open = 0;
+  researchState.phaseIndex = -1; researchState.observed = 0; researchState.confirmed = 0;
+  researchState.open = 0;
   researchState.leads = 0;
   researchState.feedKeys.clear();
   $("#live-graph-pause").textContent = "Pause";
@@ -1619,7 +1640,7 @@ function resetLiveGraph() {
   $("#live-graph-empty").hidden = false;
   $("#live-graph-tooltip").hidden = true;
   $("#research-milestone").hidden = true;
-  $("#discovery-confirmed").textContent = "0";
+  $("#discovery-observed").textContent = "0";
   $("#discovery-open").textContent = "0";
   document.querySelectorAll("#discovery-feed .discovery-entry").forEach(item => item.remove());
   $("#discovery-feed-empty").hidden = false;
@@ -1637,7 +1658,7 @@ function beginResearchRoom() {
     "Specter is classifying the input before choosing which public sources to contact.", "busy");
 }
 
-function finishLiveGraph() {
+function finishLiveGraph(stats = {}) {
   liveGraph.active = false;
   setLiveGraphStatus("Complete", "success");
   setResearchPhase("synthesize");
@@ -1645,8 +1666,10 @@ function finishLiveGraph() {
     item.classList.add("complete"); item.classList.remove("current");
     item.removeAttribute("aria-current");
   });
-  setResearchNow("Investigation complete", "The profile is ready",
-    `${researchState.confirmed} confirmed finding(s) and ${researchState.open} item(s) for review were recorded.`,
+  researchState.confirmed = Number(stats.hits || stats.confirmed_hits || 0);
+  const observed = Number(stats.observed_hits ?? researchState.observed);
+  setResearchNow("Investigation complete", "The evidence is ready for review",
+    `${researchState.confirmed} identity-supporting finding(s), ${observed} positive source observation(s), and ${researchState.open} open item(s) were recorded.`,
     "success");
   showResearchMilestone("Research complete");
   setTimeout(fitLiveGraph, 80);
@@ -1947,11 +1970,16 @@ function lineChart(id, series) {
 }
 
 async function loadAnalytics() {
-  const [a, evaluation] = await Promise.all([
+  const canManageEvaluationKit = !authState.user || authState.user.role === "admin";
+  const [a, evaluation, evaluationKit] = await Promise.all([
     fetch("/api/analytics").then(response => response.json()),
     fetch("/api/evaluation").then(response => response.json()),
+    canManageEvaluationKit
+      ? fetch("/api/evaluation-kit").then(response => response.ok ? response.json() : null)
+      : Promise.resolve(null),
   ]);
   renderEvaluationReadiness(evaluation.latest);
+  if (canManageEvaluationKit) renderEvaluationKit(evaluationKit);
   const observationSections = document.querySelectorAll("#panel-confidence .observation-quality");
   observationSections.forEach(section => { section.hidden = !a.n_observations; });
   if (!a.n_observations) {
@@ -2004,17 +2032,137 @@ async function loadAnalytics() {
 function renderEvaluationReadiness(report) {
   const root = $("#evaluation-readiness");
   if (!report) {
-    root.innerHTML = `<div class="readiness-state needs-evidence"><strong>No evaluation recorded</strong><span>Run the packaged replay once, then replace it with independently reviewed cases.</span></div>`;
+    root.innerHTML = `<div class="readiness-state needs-evidence"><strong>No quality review recorded</strong><span>Start with a private self-check. Independent evidence is still required for release readiness.</span></div>`;
     return;
   }
   const gate = report.gate || {};
   const metrics = report.metrics || {};
   const state = gate.ready ? "ready" : "needs-evidence";
   const reasons = (gate.reasons || []).slice(0, 5).map(item => `<li>${esc(item)}</li>`).join("");
-  root.innerHTML = `<div class="readiness-state ${state}"><div><span class="eyebrow">${esc(report.dataset?.provenance || "unknown provenance")}</span><strong>${esc(gate.status || "NEEDS_EVIDENCE")}</strong><span>${esc(report.dataset?.name || "Evaluation")}</span></div>`
-    + `<div class="readiness-metrics"><span><b>${metrics.claims || 0}</b> claims</span><span><b>${Math.round((metrics.precision || 0) * 100)}%</b> precision</span><span><b>${Math.round((metrics.recall || 0) * 100)}%</b> recall</span><span><b>${Math.round((metrics.profile_accuracy || 0) * 100)}%</b> profile accuracy</span></div></div>`
+  const mode = String(report.dataset?.evaluation_mode || "frozen_snapshot").replaceAll("_", " ");
+  root.innerHTML = `<div class="readiness-state ${state}"><div><span class="eyebrow">${esc(report.dataset?.provenance || "unknown provenance")} · ${esc(mode)}</span><strong>${esc(gate.status || "NEEDS_EVIDENCE")}</strong><span>${esc(report.dataset?.name || "Evaluation")}</span></div>`
+    + `<div class="readiness-metrics"><span><b>${metrics.claims || 0}</b> claims</span><span><b>${Math.round((metrics.precision || 0) * 100)}%</b> precision</span><span><b>${Math.round((metrics.recall || 0) * 100)}%</b> recall</span><span><b>${Math.round((metrics.decision_coverage || 0) * 100)}%</b> decided</span><span><b>${Math.round((metrics.profile_accuracy || 0) * 100)}%</b> profile accuracy</span></div></div>`
     + (reasons ? `<ul class="profile-gaps readiness-reasons">${reasons}</ul>` : "");
 }
+
+function renderEvaluationKit(kit) {
+  if (!kit) return;
+  const exists = Boolean(kit.exists);
+  const mode = kit.review_mode || "operator_pilot";
+  const isPilot = mode === "operator_pilot";
+  $("#evaluation-kit-curtain").dataset.reviewMode = mode;
+  $("#evaluation-kit-create").hidden = exists;
+  $("#evaluation-kit-capture").hidden = !exists;
+  $("#evaluation-kit-summary").textContent = exists
+    ? (isPilot
+      ? `Private self-check · ${kit.cases || 0} cases`
+      : `${kit.cases || 0} / 50 cases · ${kit.subjects || 0} / 25 people`)
+    : "Not created";
+  $("#evaluation-kit-download").disabled = !(kit.ready_for_review);
+  $("#evaluation-kit-download").textContent = isPilot
+    ? "Download self-check"
+    : "Download blind review";
+  if (exists) {
+    const categories = (kit.categories || []).length
+      ? `${kit.categories.length} / 3 clue types`
+      : "No clue types yet";
+    const subjects = `${kit.subjects || 0} ${(kit.subjects || 0) === 1 ? "person" : "people"}`;
+    $("#evaluation-kit-status").textContent = `${kit.claims || 0} claims · ${subjects} · ${categories}`;
+  }
+}
+
+function evaluationKitError(data, fallback) {
+  return data?.error || data?.detail || fallback;
+}
+
+async function refreshEvaluationKit() {
+  const response = await fetch("/api/evaluation-kit");
+  if (response.ok) renderEvaluationKit(await response.json());
+}
+
+$("#evaluation-kit-create").addEventListener("submit", async event => {
+  event.preventDefault();
+  const status = $("#evaluation-kit-status");
+  status.textContent = "Creating review set…";
+  const form = Object.fromEntries(new FormData(event.currentTarget).entries());
+  const response = await fetch("/api/evaluation-kit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(form),
+  });
+  const data = await response.json();
+  status.textContent = response.ok ? "Review set created." : evaluationKitError(data, "Could not create the review set.");
+  if (response.ok) renderEvaluationKit(data);
+});
+
+$("#evaluation-kit-capture").addEventListener("submit", async event => {
+  event.preventDefault();
+  const status = $("#evaluation-kit-status");
+  status.textContent = "Adding finished investigation…";
+  const form = Object.fromEntries(new FormData(event.currentTarget).entries());
+  form.run_id = Number(form.run_id);
+  const response = await fetch("/api/evaluation-kit/cases", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(form),
+  });
+  const data = await response.json();
+  status.textContent = response.ok
+    ? `Added ${form.case_id} without exposing Specter's decisions.`
+    : evaluationKitError(data, "Could not add the investigation.");
+  if (response.ok) {
+    event.currentTarget.reset();
+    renderEvaluationKit(data);
+  }
+});
+
+$("#evaluation-kit-download").addEventListener("click", async () => {
+  const status = $("#evaluation-kit-status");
+  const isPilot = $("#evaluation-kit-curtain").dataset.reviewMode === "operator_pilot";
+  status.textContent = isPilot ? "Preparing self-check…" : "Preparing blind review…";
+  const response = await fetch("/api/evaluation-kit/review-sheet");
+  if (!response.ok) {
+    const data = await response.json();
+    status.textContent = evaluationKitError(data, "Could not prepare the review.");
+    return;
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = isPilot ? "specter-self-check.csv" : "specter-blind-review.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+  status.textContent = isPilot ? "Self-check downloaded." : "Blind review downloaded.";
+});
+
+$("#evaluation-kit-file").addEventListener("change", event => {
+  const file = event.currentTarget.files[0];
+  $("#evaluation-kit-finalize").disabled = !file;
+  $("#evaluation-kit-status").textContent = file ? `${file.name} ready to import.` : "";
+});
+
+$("#evaluation-kit-finalize").addEventListener("click", async () => {
+  const file = $("#evaluation-kit-file").files[0];
+  if (!file) return;
+  const status = $("#evaluation-kit-status");
+  const isPilot = $("#evaluation-kit-curtain").dataset.reviewMode === "operator_pilot";
+  status.textContent = isPilot ? "Validating private self-check…" : "Validating independent review…";
+  const response = await fetch("/api/evaluation-kit/finalize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ review_csv: await file.text() }),
+  });
+  const data = await response.json();
+  status.textContent = response.ok
+    ? `Evaluation #${data.evaluation_id} recorded: ${data.gate.status}.`
+    : evaluationKitError(data, "The completed review could not be validated.");
+  if (response.ok) {
+    $("#evaluation-kit-file").value = "";
+    $("#evaluation-kit-finalize").disabled = true;
+    renderEvaluationReadiness(data);
+    await refreshEvaluationKit();
+  }
+});
 
 // --- Investigation reasoning ----------------------------------------------
 async function loadReasoning() {
@@ -2090,7 +2238,7 @@ async function loadCalibration(){
     + `precision ${(cf.precision||0).toFixed(2)} · recall ${(cf.recall||0).toFixed(2)}</small><br>`
     + `<small class="tag">${esc((r.suggestion||{}).rationale||"")}</small>`
     + warning
-    + (imp ? `<br><small class="bd-shadow">independence flip: ${imp.entities_changed}/${imp.entities} entities would change (mean Δ ${imp.mean_abs_delta})</small>` : "")
+    + (imp ? `<br><small class="bd-shadow">legacy connector comparison: ${imp.entities_changed}/${imp.entities} entities differ (mean Δ ${imp.mean_abs_delta})</small>` : "")
     + `</div>`
     + `<table><thead><tr><th>bin</th><th>n</th><th>pred</th><th>empirical</th><th></th></tr></thead><tbody>${bins}</tbody></table>`;
 }

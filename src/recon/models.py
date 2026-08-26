@@ -180,16 +180,19 @@ class Finding(BaseModel):
 
     @property
     def is_hit(self) -> bool:
-        """Confirmed presence — drives correlation, counting, and change diffs.
-        UNVERIFIABLE is deliberately excluded: it is not evidence of existence."""
+        """The source positively observed its narrow claim.
+
+        Identity confirmation is stricter and is decided by the evidence policy
+        plus corroboration; callers must not use this property as ownership proof.
+        """
         return self.verdict == Verdict.FOUND
 
     @property
     def is_candidate(self) -> bool:
-        """Presence is confirmed or plausible; useful for display, never counting."""
+        """Presence is observed or plausible; useful for display, never identity proof."""
         return self.verdict in (Verdict.FOUND, Verdict.UNCERTAIN)
 
     @property
     def is_notable(self) -> bool:
-        """Worth showing to the user (confirmed, candidate, or couldn't tell)."""
+        """Worth showing to the user (observed, candidate, or couldn't tell)."""
         return self.verdict in (Verdict.FOUND, Verdict.UNCERTAIN, Verdict.UNVERIFIABLE)

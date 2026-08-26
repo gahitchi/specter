@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
+from ..evidence import EvidencePolicy
 from ..graph_models import Artifact, ArtifactType
 from ..models import Finding, Verdict
 from .base import Module, ModuleContext
@@ -35,6 +36,7 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
         reasons=["user returned by the official Hacker News Firebase API"],
         signals={"username:hackernews": str(user.get("id") or art.normalized)},
         data={key: user.get(key) for key in ("created", "karma", "about")},
+        policy=EvidencePolicy.corroborated(),
     ))
     await ctx.emit_artifact(Artifact.make(
         ArtifactType.ACCOUNT_PROFILE, url, parent=art, source_module="hackernews"

@@ -17,7 +17,7 @@ def _model_payload():
         "decision_threshold": 0.8,
         "scaler": {"mean": [0.0] * len(FEATURE_NAMES), "scale": [1.0] * len(FEATURE_NAMES)},
         "model": {"intercept": -2.0, "coefficients": [1.0] + [0.0] * (len(FEATURE_NAMES) - 1)},
-        "metrics": {"false_positive_rate": 0.0, "ece": 0.05},
+        "metrics": {"precision": 1.0, "false_positive_rate": 0.0, "ece": 0.05},
         "activation_eligible": True,
     }
 
@@ -37,6 +37,20 @@ def test_identity_model_rejects_ineligible_artifact(tmp_path):
     payload["activation_eligible"] = False
     path = tmp_path / "identity.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="activation thresholds"):
+        load_model(path)
+
+
+@pytest.mark.parametrize(
+    ("metric", "value"),
+    [("precision", 0.98), ("false_positive_rate", 0.02), ("ece", 0.11)],
+)
+def test_identity_model_rechecks_current_activation_policy(tmp_path, metric, value):
+    payload = _model_payload()
+    payload["metrics"][metric] = value
+    path = tmp_path / "identity.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
     with pytest.raises(ValueError, match="activation thresholds"):
         load_model(path)
 

@@ -167,8 +167,13 @@ async def _cmd_scan(args) -> int:
             )
 
     stop = f"  (stopped: {result['stop_reason']})" if result.get("stop_reason") else ""
-    print(f"\nrun #{result['run_id']} — {sum(1 for f in findings if f.is_hit)} hit(s) "
-          f"of {len(findings)} checks; {len(result.get('artifacts', []))} artifact(s) "
+    confirmed_hits = int((summary.get("profile") or {}).get("counts", {}).get(
+        "confirmed_findings", 0
+    ))
+    observed_hits = sum(1 for finding in findings if finding.is_hit)
+    print(f"\nrun #{result['run_id']} — {confirmed_hits} identity-supporting, "
+          f"{observed_hits} observed of {len(findings)} checks; "
+          f"{len(result.get('artifacts', []))} artifact(s) "
           f"discovered.{stop}", file=sys.stderr)
 
     if watch and args.watch:
@@ -361,9 +366,9 @@ async def _cmd_calibrate(args) -> int:
     db = get_db()
     imp = independence_impact(db)
     report["independence_impact"] = imp
-    print(f"  independence flip: {imp['entities_changed']}/{imp['entities']} stored "
-          f"entities would change (mean delta {imp['mean_abs_delta']}); flip "
-          "`confidence_independence` once verify calibration is healthy.")
+    print(f"  independence comparison: {imp['entities_changed']}/{imp['entities']} stored "
+          f"entities differ from legacy connector-name breadth "
+          f"(mean delta {imp['mean_abs_delta']}).")
     with db.session() as s:
         row = repo.save_calibration(s, report)
     print(f"  saved calibration #{row.id}", file=sys.stderr)
@@ -404,11 +409,13 @@ def _cmd_analytics(args) -> int:
 # --- review / governance --------------------------------------------------
 
 def _cmd_review(args) -> int:
+    from .correlate.graph import correlate_run
     from .governance import review_observation
     from .store import get_db
 
     try:
-        with get_db().session() as session:
+        db = get_db()
+        with db.session() as session:
             review = review_observation(
                 session,
                 args.observation,
@@ -416,6 +423,8 @@ def _cmd_review(args) -> int:
                 note=args.note or "",
                 reviewer=args.reviewer,
             )
+            run_id = review.run_id
+        correlate_run(db, run_id)
         print(f"review #{review.id}: observation {review.observation_id} -> {review.decision}")
         return 0
     except LookupError as exc:
@@ -777,6 +786,80 @@ def _cmd_evaluate(args) -> int:
     return 0 if report["gate"]["ready"] or not args.require_ready else 1
 
 
+def _cmd_evaluation_kit(args) -> int:
+    from .evaluation_corpus import (
+        capture_run,
+        create_kit,
+        finalize_kit,
+        load_kit,
+        review_sheet,
+    )
+
+    try:
+        if args.kit_command == "create":
+            kit = create_kit(
+                args.out,
+                args.name,
+                args.description or "",
+                args.mode,
+            )
+            print(f"Created private review kit at {Path(args.out).expanduser().resolve()}")
+            print(f"  {kit.name}: {kit.review_mode.replace('_', ' ')}, no captured cases yet")
+        elif args.kit_command == "capture":
+            kit = load_kit(args.kit)
+            case = capture_run(
+                args.kit,
+                run_id=args.run,
+                case_id=args.case,
+                subject_group=args.subject_group,
+                category=args.category,
+                authorization_basis=args.authorization,
+            )
+            review_label = "self-check" if kit.review_mode == "operator_pilot" else "blind review"
+            print(
+                f"Captured run #{case.source_run_id} as {case.id}: "
+                f"{len(case.review_claims)} claim(s) awaiting {review_label}"
+            )
+        elif args.kit_command == "review-sheet":
+            kit = load_kit(args.kit)
+            path = review_sheet(args.kit, args.out)
+            review_label = "self-check" if kit.review_mode == "operator_pilot" else "blind review"
+            print(f"Created {review_label} sheet at {path}")
+            print("  The sheet does not reveal Specter's verdicts or confidence scores.")
+        elif args.kit_command == "finalize":
+            dataset = finalize_kit(args.kit, args.review, args.out)
+            label = (
+                "independently reviewed"
+                if dataset.provenance == "externally_verified"
+                else "operator pilot"
+            )
+            print(
+                f"Finalized {len(dataset.cases)} {label} case(s) "
+                f"at {Path(args.out).expanduser().resolve()}"
+            )
+            print(f"  Evaluate with: specter evaluate --dataset {args.out} --require-ready")
+        elif args.kit_command == "status":
+            kit = load_kit(args.kit)
+            claims = sum(len(case.review_claims) for case in kit.cases)
+            categories = sorted({case.category for case in kit.cases})
+            subjects = {case.subject_group for case in kit.cases}
+            phone_cases = sum(case.category == "phone" for case in kit.cases)
+            print(f"{kit.name}: {len(kit.cases)} case(s), {claims} claim(s)")
+            print(
+                f"  mode: {kit.review_mode.replace('_', ' ')} | subjects: {len(subjects)} | "
+                f"categories: {', '.join(categories) if categories else 'none'} | "
+                f"phone cases: {phone_cases}"
+            )
+            print(
+                "  release target: 50 cases from 25+ subjects across 3+ categories, "
+                "including 10+ phone cases"
+            )
+        return 0
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
 def _cmd_diagnostics(args) -> int:
     from .diagnostics import collect
 
@@ -859,6 +942,54 @@ def build_parser() -> argparse.ArgumentParser:
     evaluation.add_argument("--json", action="store_true", help="print JSON")
     evaluation.add_argument("--require-ready", action="store_true",
                             help="exit nonzero unless the real-evidence gate is ready")
+
+    evaluation_kit = sub.add_parser(
+        "evaluation-kit", help="build a private quality review set"
+    )
+    kit_commands = evaluation_kit.add_subparsers(dest="kit_command", required=True)
+    kit_create = kit_commands.add_parser("create", help="create an empty private review kit")
+    kit_create.add_argument("--out", required=True, help="private review-kit JSON path")
+    kit_create.add_argument("--name", required=True)
+    kit_create.add_argument("--description")
+    kit_create.add_argument(
+        "--mode",
+        choices=["operator_pilot", "independent"],
+        default="operator_pilot",
+        help="private self-check or independently reviewed release evidence",
+    )
+    kit_capture = kit_commands.add_parser("capture", help="add a completed run to a kit")
+    kit_capture.add_argument("--kit", required=True)
+    kit_capture.add_argument("--run", type=int, required=True)
+    kit_capture.add_argument("--case", required=True, help="stable non-identifying case id")
+    kit_capture.add_argument(
+        "--subject-group",
+        required=True,
+        help="stable non-identifying subject id shared by related clues",
+    )
+    kit_capture.add_argument("--category", required=True)
+    kit_capture.add_argument(
+        "--authorization",
+        required=True,
+        choices=[
+            "self_owned",
+            "documented_authorization",
+            "controlled_test_asset",
+            "public_organization_asset",
+        ],
+    )
+    kit_sheet = kit_commands.add_parser(
+        "review-sheet", help="export a sheet that hides Specter's decisions"
+    )
+    kit_sheet.add_argument("--kit", required=True)
+    kit_sheet.add_argument("--out", required=True)
+    kit_finalize = kit_commands.add_parser(
+        "finalize", help="validate a completed review and create an evaluation dataset"
+    )
+    kit_finalize.add_argument("--kit", required=True)
+    kit_finalize.add_argument("--review", required=True)
+    kit_finalize.add_argument("--out", required=True)
+    kit_status = kit_commands.add_parser("status", help="show private corpus coverage")
+    kit_status.add_argument("--kit", required=True)
 
     diagnostics = sub.add_parser(
         "diagnostics", help="check installation, storage, updates, and runtime safety"
@@ -979,6 +1110,8 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(asyncio.run(_cmd_calibrate(args)))
     if cmd == "evaluate":
         raise SystemExit(_cmd_evaluate(args))
+    if cmd == "evaluation-kit":
+        raise SystemExit(_cmd_evaluation_kit(args))
     if cmd == "diagnostics":
         raise SystemExit(_cmd_diagnostics(args))
     if cmd == "analytics":

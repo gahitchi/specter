@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..evidence import EvidencePolicy
 from ..graph_models import Artifact, ArtifactType
 from ..models import Finding, Verdict
 from .base import Module, ModuleContext
@@ -34,8 +35,12 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
         source="gitlab:user", category="username", label=f"GitLab: {user.get('username')}",
         url=url, verdict=Verdict.FOUND, confidence=0.84,
         reasons=["exact username returned by the public GitLab Users API"],
-        signals={"username:gitlab": art.normalized},
+        signals={
+            "username:gitlab": art.normalized,
+            **({"name": user["name"]} if user.get("name") else {}),
+        },
         data={key: user.get(key) for key in ("id", "name", "state", "avatar_url")},
+        policy=EvidencePolicy.corroborated(),
     ))
     if url:
         await ctx.emit_artifact(Artifact.make(

@@ -1,4 +1,5 @@
 import dataclasses
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,14 +13,34 @@ from recon.store import get_db
 from recon.store.db import Database
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 def _login(client, username, password):
     response = client.post("/api/auth/login", json={"username": username, "password": password})
     assert response.status_code == 200
     return response.json()["csrf_token"]
 
 
-def test_health_metrics_and_request_body_limit(monkeypatch):
+def test_platform_installers_create_and_remove_desktop_and_menu_launchers():
+    windows_install = (ROOT / "install.ps1").read_text(encoding="utf-8")
+    windows_uninstall = (ROOT / "uninstall.ps1").read_text(encoding="utf-8")
+    linux_install = (ROOT / "install.sh").read_text(encoding="utf-8")
+    linux_uninstall = (ROOT / "uninstall.sh").read_text(encoding="utf-8")
+
+    assert "SpecialFolder]::Programs" in windows_install
+    assert "SpecialFolder]::DesktopDirectory" in windows_install
+    assert "SpecialFolder]::Programs" in windows_uninstall
+    assert "SpecialFolder]::DesktopDirectory" in windows_uninstall
+    assert '$applications_directory/specter.desktop' in linux_install
+    assert '$desktop_directory/Specter.desktop' in linux_install
+    assert '$data_directory/applications/specter.desktop' in linux_uninstall
+    assert '$desktop_directory/Specter.desktop' in linux_uninstall
+
+
+def test_health_metrics_and_request_body_limit(monkeypatch, tmp_path):
     token = "m" * 32
+    monkeypatch.setenv("SPECTER_DATA_DIR", str(tmp_path / "specter-data"))
     monkeypatch.setattr(server, "SETTINGS", dataclasses.replace(
         server.SETTINGS, metrics_enabled=True, metrics_token=token
     ))
@@ -39,6 +60,10 @@ def test_health_metrics_and_request_body_limit(monkeypatch):
         "/api/keys", json={"name": "shodan", "value": "x" * 70_000}
     )
     assert too_large.status_code == 413
+    review_import = client.post(
+        "/api/evaluation-kit/finalize", json={"review_csv": "x" * 70_000}
+    )
+    assert review_import.status_code == 400
 
 
 def test_production_defaults_and_secret_file(monkeypatch, tmp_path):

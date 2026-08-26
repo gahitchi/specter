@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 from typing import Any
 
@@ -70,6 +71,31 @@ def review_observation(
         actor_user_id=reviewer_user_id,
         detail={"review_id": review.id, "decision": decision},
     )
+    # A profile snapshot was synthesized before this human decision existed.
+    # Never continue presenting that snapshot as current; correlation is rebuilt
+    # by the caller and a new scan can produce a fresh full profile.
+    run = session.get(m.Run, observation.run_id)
+    if run is not None:
+        stats = copy.deepcopy(run.stats or {})
+        profile = copy.deepcopy(stats.get("profile") or {})
+        if profile:
+            profile["status"] = "unresolved"
+            profile["confidence"] = 0.0
+            profile["assessment"] = (
+                "A human review changed the evidence interpretation. Run the "
+                "investigation again to synthesize a current profile."
+            )
+            profile["primary_identity"] = None
+            profile["accounts"] = []
+            profile["identifiers"] = [
+                item
+                for item in profile.get("identifiers", [])
+                if item.get("standing") == "provided"
+            ]
+            profile["complete"] = False
+            stats["profile"] = profile
+        stats["interpretation_stale_after_review"] = True
+        run.stats = stats
     return review
 
 

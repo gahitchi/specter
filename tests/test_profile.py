@@ -3,6 +3,7 @@
 import pytest
 
 from recon import engine as engine_mod
+from recon.evidence import EvidencePolicy
 from recon.graph_models import Artifact, ArtifactType
 from recon.identifiers import classify_input
 from recon.models import Finding, Query, Verdict
@@ -35,20 +36,22 @@ def test_profile_synthesizes_confirmed_identity_accounts_and_coverage() -> None:
     ]
     summary = {
         "identities": 1,
-        "clusters": [{
-            "id": 7,
-            "label": "Alice Example",
-            "score": 0.91,
-            "confidence_shadow": 0.88,
-            "signals": {
-                "username": ["alice"],
-                "email": ["alice@example.com"],
-                "gravatar_hash": ["abc"],
-            },
-            "flags": [],
-            "sources": ["github:user", "email:gravatar"],
-            "corroboration": {"independent_classes": 2, "label": "corroborated"},
-        }],
+        "clusters": [
+            {
+                "id": 7,
+                "label": "Alice Example",
+                "score": 0.91,
+                "confidence_shadow": 0.88,
+                "signals": {
+                    "username": ["alice"],
+                    "email": ["alice@example.com"],
+                    "gravatar_hash": ["abc"],
+                },
+                "flags": [],
+                "sources": ["github:user", "email:gravatar"],
+                "corroboration": {"independent_classes": 2, "label": "corroborated"},
+            }
+        ],
     }
     artifacts = [
         Artifact.make(ArtifactType.USERNAME, "alice"),
@@ -60,8 +63,7 @@ def test_profile_synthesizes_confirmed_identity_accounts_and_coverage() -> None:
     assert profile["status"] == "corroborated"
     assert profile["primary_identity"]["id"] == 7
     assert any(
-        row["type"] == "email" and row["standing"] == "confirmed"
-        for row in profile["identifiers"]
+        row["type"] == "email" and row["standing"] == "confirmed" for row in profile["identifiers"]
     )
     assert profile["accounts"][0]["url"] == "https://github.com/alice"
     assert any(row["name"] == "company" for row in profile["details"]["identity"])
@@ -77,6 +79,32 @@ def test_empty_evidence_returns_unresolved_profile_not_a_false_negative() -> Non
     assert profile["identifiers"][0]["standing"] == "provided"
     assert "did not establish" in profile["assessment"]
     assert profile["gaps"]
+
+
+def test_phone_allocation_metadata_is_context_not_identity_confirmation() -> None:
+    metadata = Finding(
+        source="phone:validate",
+        category="phone",
+        label="Phone metadata",
+        verdict=Verdict.FOUND,
+        confidence=0.85,
+        signals={"phone_e164": "+14155552671"},
+        data={"e164": "+14155552671", "region_code": "US", "line_type": "mobile"},
+        policy=EvidencePolicy(confirmation_allowed=False, pivot_allowed=False),
+    )
+
+    profile = synthesize_profile(
+        Query(phone="+14155552671"),
+        [metadata],
+        [Artifact.make(ArtifactType.PHONE, "+14155552671")],
+        {"clusters": []},
+    )
+
+    contact = next(item for item in profile["coverage"] if item["id"] == "contact")
+    assert profile["status"] == "unresolved"
+    assert profile["counts"]["confirmed_findings"] == 0
+    assert contact["state"] == "observed"
+    assert profile["phone_research"]["decision"]["status"] == "bounded_check_complete"
 
 
 @pytest.mark.asyncio

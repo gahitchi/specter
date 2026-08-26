@@ -1,7 +1,8 @@
-"""Union-find clustering over strong identity signals.
+"""Conservative union-find clustering over verified identity signals.
 
-Two findings that share a strong signal (same gravatar_hash, orcid, phone, etc.)
-are merged into one identity cluster. Deterministic, no LLM — mirrors Specter.
+Shared strong values can propose a merge, but the resolver score and aggregate
+coherence checks must both permit it. This prevents one shared phone or hash
+from transitively joining records that disagree on another strong identifier.
 """
 
 from __future__ import annotations
@@ -9,12 +10,13 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 
+from ..evidence import confirmation_satisfied
 from ..models import Finding
 
 # Signal keys treated as strong enough to merge identities on their own.
-STRONG_KEYS = {"gravatar_hash", "orcid", "phone_e164", "email"}
+STRONG_KEYS = {"gravatar_hash", "orcid", "phone_e164", "email", "bluesky_did"}
 
-IDENTITY_CATEGORIES = {"username", "email", "phone", "name"}
+IDENTITY_CATEGORIES = {"username", "email", "phone", "name", "profile"}
 
 
 def identity_bearing(category: str) -> bool:
@@ -49,6 +51,7 @@ class Identity:
     id: int
     findings: list[Finding] = field(default_factory=list)
     signals: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
+    flags: list[str] = field(default_factory=list)
 
     def add(self, f: Finding) -> None:
         self.findings.append(f)
@@ -57,32 +60,59 @@ class Identity:
             self.signals[base].add(v)
 
 
-def cluster(findings: list[Finding]) -> list[Identity]:
-    """Group findings into identity clusters via shared strong signals."""
+def cluster(findings: list[Finding], query=None) -> list[Identity]:
+    """Group confirmation-satisfied findings without crossing contradictions."""
+    from . import coherence
+    from .blocking import candidate_pairs
+    from .resolver import classify, record_from, score
+
+    eligible = [
+        finding
+        for finding in findings
+        if confirmation_satisfied(finding, findings, query)
+    ]
+    if not eligible:
+        return []
+
     uf = _UF()
-    # Node per finding index; merge finding-nodes that share a strong signal value.
-    sig_to_node: dict[str, str] = {}
-    for i, f in enumerate(findings):
-        node = f"f{i}"
-        uf.find(node)
-        for k, v in f.signals.items():
-            base = k.split(":", 1)[0]
-            if base in STRONG_KEYS and v:
-                key = f"{base}={v.lower()}"
-                if key in sig_to_node:
-                    uf.union(node, sig_to_node[key])
-                else:
-                    sig_to_node[key] = node
+    records = [record_from(index, f.category, f.label, f.signals) for index, f in enumerate(eligible)]
+    for index in range(len(records)):
+        uf.find(str(index))
+
+    ranked_pairs = []
+    for left, right in candidate_pairs(records):
+        weight, _reasons = score(records[left], records[right])
+        ranked_pairs.append((weight, left, right))
+    ranked_pairs.sort(reverse=True)
+    for weight, left, right in ranked_pairs:
+        if classify(weight) != "MERGE":
+            continue
+        left_root, right_root = uf.find(str(left)), uf.find(str(right))
+        if left_root == right_root:
+            continue
+        combined = [
+            records[index]
+            for index in range(len(records))
+            if uf.find(str(index)) in {left_root, right_root}
+        ]
+        if coherence.check(combined):
+            continue
+        uf.union(left_root, right_root)
 
     groups: dict[str, Identity] = {}
     next_id = 0
     root_to_id: dict[str, int] = {}
-    for i, f in enumerate(findings):
-        root = uf.find(f"f{i}")
+    grouped_records: dict[str, list] = defaultdict(list)
+    for i, f in enumerate(eligible):
+        root = uf.find(str(i))
         if root not in root_to_id:
             root_to_id[root] = next_id
             groups[root] = Identity(id=next_id)
             next_id += 1
         groups[root].add(f)
+        grouped_records[root].append(records[i])
+
+    for root, identity in groups.items():
+        identity.flags = coherence.check(grouped_records[root])
 
     return list(groups.values())

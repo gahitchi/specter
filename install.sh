@@ -46,8 +46,24 @@ printf '%s\n' \
   > "$applications_directory/specter.desktop"
 chmod 0644 "$applications_directory/specter.desktop"
 
+desktop_directory=""
+if command -v xdg-user-dir >/dev/null 2>&1; then
+  desktop_directory="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+fi
+if [[ -z "$desktop_directory" || "$desktop_directory" == "$HOME" ]]; then
+  desktop_directory="$HOME/Desktop"
+fi
+mkdir -p "$desktop_directory"
+install -m 0755 "$applications_directory/specter.desktop" "$desktop_directory/Specter.desktop"
+if command -v gio >/dev/null 2>&1; then
+  gio set "$desktop_directory/Specter.desktop" metadata::trusted true >/dev/null 2>&1 || true
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$applications_directory" >/dev/null 2>&1 || true
+fi
+
 printf 'Specter installed successfully. While running, it checks for updates every 5 minutes.\n'
-printf 'Open Specter from the application menu, or launch it with: specter\n'
+printf 'Open Specter from the desktop, application menu, or launch it with: specter\n'
 printf 'Apply a downloaded update with: specter --update\n'
 printf 'Uninstall with: curl -LsSf https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/uninstall.sh | bash\n'
 

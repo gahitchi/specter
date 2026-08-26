@@ -15,7 +15,7 @@ client = TestClient(app)
 
 def _obs(verdict, confidence, source="username:GitHub", breakdown=None):
     return SimpleNamespace(verdict=verdict, confidence=confidence, source=source,
-                           breakdown=breakdown)
+                           breakdown=breakdown, signals={"email": "shared@example.com"})
 
 
 def test_confidence_histogram_skips_unscored_verdicts():

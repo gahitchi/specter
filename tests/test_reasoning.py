@@ -4,6 +4,7 @@ import pytest
 
 from recon.config import SETTINGS
 from recon.engine import GraphScanEngine
+from recon.evidence import EvidencePolicy
 from recon.graph_models import Artifact, ArtifactType
 from recon.models import Finding, Query, Verdict
 from recon.reasoning import InvestigationReasoner
@@ -16,6 +17,7 @@ def _finding(verdict: Verdict, source: str = "source:test", confidence: float = 
         label=source,
         verdict=verdict,
         confidence=confidence,
+        signals={"username": "known-handle"},
     )
 
 
@@ -29,7 +31,9 @@ def _report(
     summary = {
         "clusters": [
             {"id": 0, "flags": [], "corroboration": {"independent_classes": independent_classes}}
-        ] if findings else []
+        ]
+        if findings
+        else []
     }
     return InvestigationReasoner().report(
         Query(username="known-handle"),
@@ -92,9 +96,7 @@ def test_reasoning_never_expands_scope_or_budget_silently() -> None:
 def test_dispatch_ranking_prefers_novel_reliable_identity_evidence() -> None:
     reasoner = InvestigationReasoner()
     artifact = Artifact.make(ArtifactType.USERNAME, "known-handle")
-    low_value = SimpleNamespace(
-        name="low-value", reliability_prior=0.2, produces=set()
-    )
+    low_value = SimpleNamespace(name="low-value", reliability_prior=0.2, produces=set())
     identity = SimpleNamespace(
         name="identity", reliability_prior=0.9, produces={ArtifactType.EMAIL}
     )
@@ -123,6 +125,44 @@ def test_reasoning_makes_stop_policy_explicit() -> None:
     bounded = _report([], stop_reason="max_requests reached")
     assert bounded["stop_decision"]["code"] == "bounded_limit_reached"
     assert bounded["stop_decision"]["terminal"] is False
+
+
+def test_reasoning_does_not_treat_phone_metadata_as_an_identity_result() -> None:
+    metadata = Finding(
+        source="phone:validate",
+        category="phone",
+        label="Phone metadata",
+        verdict=Verdict.FOUND,
+        confidence=0.85,
+        signals={"phone_e164": "+14155552671"},
+        policy=EvidencePolicy(confirmation_allowed=False, pivot_allowed=False),
+    )
+    summary = {
+        "clusters": [],
+        "profile": {
+            "phone_research": {
+                "decision": {
+                    "status": "bounded_check_complete",
+                    "recommended_action": "Stop the phone-only path.",
+                }
+            }
+        },
+    }
+
+    report = InvestigationReasoner().report(
+        Query(phone="+14155552671"),
+        [metadata],
+        [Artifact.make(ArtifactType.PHONE, "+14155552671")],
+        summary,
+        stop_reason=None,
+        scope_mode="strict",
+        passive_only=True,
+        out_of_scope=[],
+    )
+
+    assert report["objective"] == "Verify the supplied identifiers"
+    assert report["evidence_state"]["confirmation_eligible_findings"] == 0
+    assert report["next_actions"][0]["id"] == "refine-identifiers"
 
 
 def test_reasoning_detects_two_low_yield_request_waves() -> None:

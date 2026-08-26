@@ -49,8 +49,9 @@ They were not published releases; their changes are included in 0.11.0.
   commit titles and dates, exact-build downloads, deliberate older-build
   installation, compatibility warnings, and protection from background
   replacement of a manual selection.
-- Start menu and Linux application-menu integration, application artwork, and
-  one-command uninstallers that preserve local investigations and settings.
+- Desktop, Start menu, and Linux application-menu integration, application
+  artwork, and one-command uninstallers that preserve local investigations and
+  settings.
 - A distinct Specter ghost icon for the desktop window, tray, Start menu,
   Linux application menu, and local web workspace.
 - A shared bounded public-document analyzer for visible text, safe links,
@@ -66,15 +67,35 @@ They were not published releases; their changes are included in 0.11.0.
   coverage, Maigret version compatibility reporting, and evidence-quality
   metrics for provenance coverage, duplicate collapse, blocked pivots,
   contradictions, parser failures, and timeouts.
-- A replayable end-to-end evaluation program with independently verified dataset
+- A frozen-snapshot evaluation program with independently verified dataset
   requirements, finding/profile/planner/stop-policy metrics, source breakdowns,
   durable history, a dashboard readiness view, and maturity-gate integration.
-- Conservative phone lifecycle and mention-role synthesis, independently
-  corroborated identity links, and a dedicated phone dossier.
+- A private quality review workflow with an honest operator-pilot mode for
+  self-owned information and a separate independent release-evaluation mode.
+  Related clues are grouped by subject, masked review sheets omit Specter's
+  decisions, and operator pilots are structurally unable to unlock readiness.
+- Conservative phone lifecycle, source-kind, and mention-role synthesis;
+  directory-lineage collapse; shared/service/reassigned-number safeguards;
+  independently corroborated strict-scope identity bridges; and a dedicated
+  phone dossier with the next justified step.
 - Redacted cross-platform diagnostics and non-destructive local/staging
   operational drills for migrations, backup restoration, functional replay,
   readiness probes, and immutable container digests.
 
+### Fixed
+
+- Separated positive source observations from identity-supporting evidence in
+  correlation, scoring, monitoring, reports, APIs, and the live interface.
+- Prevented username reuse, name-only agreement, email-domain MX records,
+  generated addresses, public-event commit authors, and breach metadata from
+  becoming automatic subject associations.
+- Collapsed native APIs, generic checks, external adapters, and parsed pages
+  from the same platform into one independence origin; capped single-origin
+  identity confidence at 0.74 and made independence-aware scoring official.
+- Blocked transitive identity merges across strong-identifier conflicts and
+  recorded same-page identity reassignment as a high-severity contradiction.
+- Tightened release and identity-model gates to 99% precision and a maximum 1%
+  false-positive rate.
 ### Changed
 
 - Specter is now the product name and primary command. Legacy package, command,

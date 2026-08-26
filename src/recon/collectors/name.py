@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Awaitable, Callable
 from urllib.parse import quote
 
+from ..evidence import EvidencePolicy
 from ..http_client import RateLimitedClient, RequestBudgetExceeded
 from ..keys import redact
 from ..models import Finding, Query, Verdict
@@ -51,6 +52,7 @@ async def collect(query: Query, client: RateLimitedClient, emit: EmitFn) -> None
                     reasons=[f"ORCID name match overlap {overlap:.2f}"],
                     signals={"orcid": orcid} if orcid and verdict == Verdict.FOUND else {},
                     data={"institutions": r.get("institution-name", [])},
+                    policy=EvidencePolicy.candidate(),
                 ))
     except RequestBudgetExceeded:
         raise
@@ -84,6 +86,7 @@ async def collect(query: Query, client: RateLimitedClient, emit: EmitFn) -> None
                     },
                     signals={"orcid": (a.get("orcid") or "").rsplit("/", 1)[-1]}
                     if a.get("orcid") and verdict == Verdict.FOUND else {},
+                    policy=EvidencePolicy.candidate(),
                 ))
     except RequestBudgetExceeded:
         raise

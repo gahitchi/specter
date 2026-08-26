@@ -58,6 +58,35 @@ def test_review_history_and_calibration_export_are_separate_from_verdict():
     assert labels[0]["site"] == "GitHub"
 
 
+def test_review_invalidates_the_pre_review_profile_snapshot():
+    with get_db().session() as session:
+        _target, run, observation = _observation(session, "profile-review")
+        run.stats = {
+            "profile": {
+                "status": "corroborated",
+                "confidence": 0.98,
+                "assessment": "Old interpretation",
+                "primary_identity": {"name": "Wrong Person"},
+                "identifiers": [
+                    {"type": "username", "value": "profile-review", "standing": "provided"},
+                    {"type": "email", "value": "wrong@example.com", "standing": "confirmed"},
+                ],
+                "accounts": [{"label": "Wrong account"}],
+            }
+        }
+        review_observation(session, observation.id, "rejected")
+        run_id = run.id
+
+    with get_db().session() as session:
+        stored = session.get(m.Run, run_id)
+        profile = stored.stats["profile"]
+        assert stored.stats["interpretation_stale_after_review"] is True
+        assert profile["status"] == "unresolved"
+        assert profile["confidence"] == 0.0
+        assert profile["accounts"] == []
+        assert [item["standing"] for item in profile["identifiers"]] == ["provided"]
+
+
 def test_review_api_roundtrip_and_missing_observation():
     with get_db().session() as session:
         _target, run, observation = _observation(session)

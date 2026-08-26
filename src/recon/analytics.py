@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 
+from .evidence import confirmation_satisfied
+from .models import Query
 from .trust import independent_classes
 
 # Verdicts whose confidence is a meaningful presence estimate (ERROR /
@@ -53,19 +55,23 @@ def top_breakdown_terms(rows, limit: int = 8) -> list[dict]:
     return items[:limit]
 
 
-def independence_coverage(rows) -> dict:
-    """Across FOUND findings, distinct source *names* vs independent *classes* —
-    the corroboration-inflation factor the 5a shadow score corrects for."""
+def independence_coverage(rows, queries: dict[int, Query] | None = None) -> dict:
+    """Compare connector names with independent classes for confirmed evidence."""
+    grouped: dict[int | None, list] = defaultdict(list)
+    for row in rows:
+        grouped[getattr(row, "target_id", None)].append(row)
     found = [
-        r for r in rows
-        if r.verdict == "FOUND"
-        and getattr(r, "temporal_status", None) != "historical"
+        row
+        for target_id, target_rows in grouped.items()
+        for row in target_rows
+        if confirmation_satisfied(row, target_rows, (queries or {}).get(target_id))
     ]
     sources = {r.source for r in found}
     classes, redundant = independent_classes(found)
     n_names, n_classes = len(sources), len(classes)
     return {
-        "found": len(found),
+        "confirmed": len(found),
+        "found": len(found),  # compatibility with existing API consumers
         "distinct_sources": n_names,
         "distinct_classes": n_classes,
         "inflation": round(n_names / n_classes, 2) if n_classes else 0.0,
@@ -139,11 +145,16 @@ def quality_metrics(rows, runs, artifacts, contradictions) -> dict:
 
 def compute(db) -> dict:
     from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
 
     from .store import models_db as m
 
     with db.session() as s:
-        obs = list(s.execute(select(m.Observation)).scalars().all())
+        obs = list(s.execute(
+            select(m.Observation).options(selectinload(m.Observation.reviews))
+        ).scalars().all())
+        targets = list(s.execute(select(m.Target)).scalars().all())
+        queries = {target.id: Query.model_validate(target.query) for target in targets}
         sources = list(s.execute(select(m.Source)).scalars().all())
         cals = list(s.execute(
             select(m.CalibrationRun).order_by(m.CalibrationRun.id)).scalars().all())
@@ -157,7 +168,7 @@ def compute(db) -> dict:
         "confidence_histogram": confidence_histogram(obs),
         "verdict_mix": verdict_mix(obs),
         "top_terms": top_breakdown_terms(obs),
-        "independence_coverage": independence_coverage(obs),
+        "independence_coverage": independence_coverage(obs, queries),
         "source_health": source_health(sources),
         "calibration_drift": calibration_drift(cals),
         "quality": quality_metrics(obs, runs, artifacts, contradictions),

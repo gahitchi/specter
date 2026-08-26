@@ -22,6 +22,7 @@ from ..evidence import (
     TemporalStatus,
     default_dimensions,
     infer_origin,
+    restrictive_policy,
     utc_now,
 )
 from ..graph_models import Artifact, ArtifactType
@@ -201,8 +202,7 @@ class Module:
                     if f.verdict in {Verdict.FOUND, Verdict.NOT_FOUND}
                     else Completeness.PARTIAL
                 )
-            if self.evidence_policy.candidate_only:
-                f.policy = self.evidence_policy.model_copy(deep=True)
+            f.policy = restrictive_policy(self.evidence_policy, f.policy)
             if f.confidence_dimensions is None:
                 f.confidence_dimensions = default_dimensions(
                     f.confidence, rel, f.completeness, f.extractions
@@ -219,7 +219,9 @@ class Module:
                     f.reasons = [*f.reasons, "(from cache)"]
                     await ctx.emit_finding(f)
                 for ad in cached.get("artifacts", []):
-                    await ctx.emit_artifact(Artifact(**ad))
+                    artifact = Artifact(**ad)
+                    artifact.policy = restrictive_policy(self.evidence_policy, artifact.policy)
+                    await ctx.emit_artifact(artifact)
                 return
 
         # 2) Circuit breaker: skip dead sources during cooldown.
@@ -242,6 +244,7 @@ class Module:
             await ctx.emit_finding(f)
 
         async def capture_artifact(a: Artifact) -> bool:
+            a.policy = restrictive_policy(self.evidence_policy, a.policy)
             buf_a.append(a)
             return await ctx.emit_artifact(a)
 
