@@ -40,10 +40,17 @@ if ($LASTEXITCODE -ne 0) {
 $BinDirectory = (& $Uv tool dir --bin).Trim()
 $Specter = Join-Path $BinDirectory "specter.exe"
 $SpecterApp = Join-Path $BinDirectory "specter-app.exe"
+if (-not (Test-Path -LiteralPath $Specter) -or -not (Test-Path -LiteralPath $SpecterApp)) {
+    throw "Specter was installed but its application launchers are missing."
+}
 $IconPath = (& $Specter --icon-path).Trim()
 if (-not (Test-Path -LiteralPath $IconPath)) {
     throw "Specter was installed but its application icon is missing."
 }
+$StableIconDirectory = Join-Path $env:LOCALAPPDATA "Specter\assets"
+$StableIconPath = Join-Path $StableIconDirectory "specter.ico"
+New-Item -ItemType Directory -Path $StableIconDirectory -Force | Out-Null
+Copy-Item -LiteralPath $IconPath -Destination $StableIconPath -Force
 
 function New-SpecterShortcut {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -57,7 +64,7 @@ function New-SpecterShortcut {
     $Shortcut.TargetPath = $SpecterApp
     $Shortcut.WorkingDirectory = $HOME
     $Shortcut.Description = "Specter research and evidence workspace"
-    $Shortcut.IconLocation = "$IconPath,0"
+    $Shortcut.IconLocation = "$StableIconPath,0"
     $Shortcut.Save()
 }
 

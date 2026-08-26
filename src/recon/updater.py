@@ -520,13 +520,34 @@ def _apply_command(manager: tuple[str, str], project: Path) -> list[str]:
             "tool",
             "install",
             "--force",
-            "--reinstall-package",
-            PACKAGE_NAME,
             "--quiet",
             "--no-progress",
             desktop_project,
         ]
     return [executable, "install", "--force", "--quiet", desktop_project]
+
+
+def _installation_is_healthy(*, timeout: float = 20.0) -> bool:
+    """Verify the replacement environment from a fresh Python process."""
+    try:
+        completed = subprocess.run(  # nosec B603
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from recon.launch import _icon_path; "
+                    "from PySide6 import QtWidgets; "
+                    "raise SystemExit(0 if _icon_path().is_file() else 1)"
+                ),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
 
 
 def apply_pending_update(*, timeout: float = 180.0) -> UpdateResult:
@@ -556,11 +577,14 @@ def apply_pending_update(*, timeout: float = 180.0) -> UpdateResult:
             update_available=True,
             message="the downloaded update could not be applied; the current version is unchanged",
         )
-    if completed.returncode:
+    if completed.returncode or not _installation_is_healthy(timeout=min(timeout, 20.0)):
         return UpdateResult(
             attempted=True,
             update_available=True,
-            message="the downloaded update could not be applied; the current version is unchanged",
+            message=(
+                "the downloaded update could not be verified. Run the official installer once "
+                "to repair Specter; your research data is unaffected"
+            ),
         )
     _write_json(
         _cache_root() / "installed.json",

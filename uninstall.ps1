@@ -19,5 +19,7 @@ $ShortcutPaths = @(
 foreach ($ShortcutPath in $ShortcutPaths) {
     Remove-Item -LiteralPath $ShortcutPath -Force -ErrorAction SilentlyContinue
 }
+Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA "Specter\assets") `
+    -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host "Specter and its shortcuts were removed. Investigation data and settings were left in place."

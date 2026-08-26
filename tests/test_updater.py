@@ -359,13 +359,14 @@ def test_apply_uses_exact_cached_revision(monkeypatch, update_environment):
             commands.append(command) or subprocess.CompletedProcess(command, 0, "", "")
         ),
     )
+    monkeypatch.setattr(updater, "_installation_is_healthy", lambda **_kwargs: True)
 
     result = updater.apply_pending_update()
 
     assert result.applied
     assert commands == [[
-        "uv", "tool", "install", "--force", "--reinstall-package", "osint-recon",
-        "--quiet", "--no-progress", f"{project}[desktop]",
+        "uv", "tool", "install", "--force", "--quiet", "--no-progress",
+        f"{project}[desktop]",
     ]]
     assert not (update_environment / "pending.json").exists()
     assert json.loads((update_environment / "installed.json").read_text())["revision"] == REVISION_B
@@ -386,6 +387,24 @@ def test_apply_preserves_pending_update_on_failure(monkeypatch, update_environme
     result = updater.apply_pending_update()
 
     assert not result.applied and result.update_available
+    assert (update_environment / "pending.json").exists()
+
+
+def test_apply_rejects_an_installation_that_cannot_import_specter(
+    monkeypatch, update_environment
+):
+    _cached_project(update_environment, REVISION_B)
+    monkeypatch.setattr(
+        updater.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "", ""),
+    )
+    monkeypatch.setattr(updater, "_installation_is_healthy", lambda **_kwargs: False)
+
+    result = updater.apply_pending_update()
+
+    assert not result.applied and result.update_available
+    assert "could not be verified" in result.message
     assert (update_environment / "pending.json").exists()
 
 
@@ -484,6 +503,21 @@ def test_launcher_exposes_the_platform_icon_path(capsys):
     assert icon_path == launch._icon_path()
     assert icon_path.is_file()
     assert icon_path.suffix == (".ico" if os.name == "nt" else ".png")
+
+
+def test_launcher_prefers_the_gui_executable_beside_the_invoked_command(
+    monkeypatch, tmp_path
+):
+    from recon import launch
+
+    command = tmp_path / ("specter.exe" if os.name == "nt" else "specter")
+    application = tmp_path / ("specter-app.exe" if os.name == "nt" else "specter-app")
+    command.touch()
+    application.touch()
+    monkeypatch.setattr(launch.sys, "argv", [str(command)])
+    monkeypatch.setattr(launch.shutil, "which", lambda _name: str(tmp_path / "wrong"))
+
+    assert launch._application_executable() == application.resolve()
 
 
 def test_launcher_refuses_update_while_specter_is_running(monkeypatch, capsys):

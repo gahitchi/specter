@@ -30,8 +30,12 @@ def test_platform_installers_create_and_remove_desktop_and_menu_launchers():
 
     assert "SpecialFolder]::Programs" in windows_install
     assert "SpecialFolder]::DesktopDirectory" in windows_install
+    assert 'Join-Path $env:LOCALAPPDATA "Specter\\assets"' in windows_install
+    assert "Copy-Item -LiteralPath $IconPath -Destination $StableIconPath" in windows_install
+    assert '$Shortcut.IconLocation = "$StableIconPath,0"' in windows_install
     assert "SpecialFolder]::Programs" in windows_uninstall
     assert "SpecialFolder]::DesktopDirectory" in windows_uninstall
+    assert 'Join-Path $env:LOCALAPPDATA "Specter\\assets"' in windows_uninstall
     assert '$applications_directory/specter.desktop' in linux_install
     assert '$desktop_directory/Specter.desktop' in linux_install
     assert '$data_directory/applications/specter.desktop' in linux_uninstall

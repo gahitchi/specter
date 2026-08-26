@@ -46,22 +46,43 @@ def _installed_tool_environment() -> bool:
     return Path(sys.prefix).name.casefold().replace("_", "-") == "osint-recon"
 
 
-def _refresh_platform_icon() -> None:
+def _application_executable() -> Path | None:
+    suffix = ".exe" if os.name == "nt" else ""
+    candidates: list[str | None] = []
+    if sys.argv and sys.argv[0]:
+        invoked = Path(sys.argv[0]).expanduser()
+        candidates.extend((str(invoked.with_name(f"specter-app{suffix}")), str(invoked)))
+    candidates.append(shutil.which("specter-app"))
+    candidates.append(str(Path.home() / ".local" / "bin" / f"specter-app{suffix}"))
+    for candidate in candidates:
+        if candidate:
+            path = Path(candidate)
+            if path.is_file() and path.name.casefold().startswith("specter-app"):
+                return path.resolve()
+    return None
+
+
+def _refresh_platform_integration() -> None:
     icon = _icon_path()
     if not icon.is_file():
         return
     try:
         if os.name == "nt":
             appdata = os.environ.get("APPDATA")
+            localappdata = os.environ.get("LOCALAPPDATA")
             system_root = os.environ.get("SystemRoot")
-            if not appdata or not system_root:
+            executable = _application_executable()
+            if not appdata or not localappdata or not system_root or executable is None:
                 return
             powershell = (
                 Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
             )
             if not powershell.is_file():
                 return
-            shortcut = (
+            stable_icon = Path(localappdata) / "Specter" / "assets" / "specter.ico"
+            stable_icon.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(icon, stable_icon)
+            start_shortcut = (
                 Path(appdata)
                 / "Microsoft"
                 / "Windows"
@@ -69,16 +90,22 @@ def _refresh_platform_icon() -> None:
                 / "Programs"
                 / "Specter.lnk"
             )
-            if not shortcut.is_file():
-                return
             script = (
-                "$s=(New-Object -ComObject WScript.Shell).CreateShortcut("
-                "$env:SPECTER_SHORTCUT_PATH);"
-                "$s.IconLocation=$env:SPECTER_ICON_PATH+',0';$s.Save()"
+                "$w=New-Object -ComObject WScript.Shell;"
+                "$d=[Environment]::GetFolderPath("
+                "[Environment+SpecialFolder]::DesktopDirectory);"
+                "$paths=@($env:SPECTER_START_SHORTCUT,(Join-Path $d 'Specter.lnk'));"
+                "foreach($p in $paths){$s=$w.CreateShortcut($p);"
+                "$s.TargetPath=$env:SPECTER_APP_PATH;"
+                "$s.WorkingDirectory=$env:SPECTER_WORKING_DIRECTORY;"
+                "$s.Description='Specter research and evidence workspace';"
+                "$s.IconLocation=$env:SPECTER_ICON_PATH+',0';$s.Save()}"
             )
             environment = os.environ.copy()
-            environment["SPECTER_SHORTCUT_PATH"] = str(shortcut)
-            environment["SPECTER_ICON_PATH"] = str(icon)
+            environment["SPECTER_START_SHORTCUT"] = str(start_shortcut)
+            environment["SPECTER_APP_PATH"] = str(executable)
+            environment["SPECTER_WORKING_DIRECTORY"] = str(Path.home())
+            environment["SPECTER_ICON_PATH"] = str(stable_icon)
             subprocess.run(
                 [
                     str(powershell), "-NoProfile", "-NonInteractive",
@@ -268,7 +295,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if not args.headless and not args.update and _installed_tool_environment():
-        _refresh_platform_icon()
+        _refresh_platform_integration()
 
     host, port = SETTINGS.host, args.port
     url = f"http://{host}:{port}"
