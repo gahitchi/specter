@@ -381,6 +381,7 @@ def _pending_metadata() -> dict:
         "project": project,
         "title": str(payload.get("title") or "").strip() or None,
         "selected": payload.get("selected") is True,
+        "base_revision": _valid_revision(payload.get("base_revision")),
     }
 
 
@@ -453,6 +454,7 @@ def check_for_update(
                 _cache_root() / "pending.json",
                 {
                     "revision": remote,
+                    "base_revision": installed,
                     "downloaded_at": int(time.time()),
                     "selected": False,
                 },
@@ -662,6 +664,7 @@ def _schedule_windows_update(
         creationflags=(
             getattr(subprocess, "CREATE_NO_WINDOW", 0)
             | getattr(subprocess, "DETACHED_PROCESS", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         ),
         close_fds=True,
     )
@@ -696,13 +699,24 @@ def apply_pending_update(*, timeout: float = 180.0) -> UpdateResult:
     if manager is None:
         return UpdateResult(message="updates are unavailable for this installation")
 
-    pending = _pending_revision()
-    if pending is None:
+    pending_metadata = _pending_metadata()
+    if not pending_metadata.get("selected"):
+        installed = _installed_revision()
         check = check_for_update(force=True, timeout=min(timeout, 20.0))
-        pending = _pending_revision()
-        if pending is None:
+        pending_metadata = _pending_metadata()
+        if not pending_metadata:
             return check
-    revision, project = pending
+        if not check.update_available and pending_metadata.get("base_revision") != installed:
+            return UpdateResult(
+                attempted=True,
+                update_available=True,
+                message=(
+                    "Specter could not verify that the downloaded build matches this "
+                    "installation. Connect to GitHub and try again; nothing was changed"
+                ),
+            )
+    revision = pending_metadata["revision"]
+    project = pending_metadata["project"]
     if _requires_update_handoff():
         try:
             _schedule_windows_update(manager, revision, project)

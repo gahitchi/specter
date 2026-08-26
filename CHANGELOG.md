@@ -87,6 +87,8 @@ They were not published releases; their changes are included in 0.11.0.
 - Kept Windows updates outside the running Specter environment so an update can
   close, replace, verify, and reopen the application without damaging its own
   installation.
+- Refreshed automatically downloaded builds before installation so a stale
+  cache cannot silently move Specter to an older revision.
 - Separated positive source observations from identity-supporting evidence in
   correlation, scoring, monitoring, reports, APIs, and the live interface.
 - Prevented username reuse, name-only agreement, email-domain MX records,

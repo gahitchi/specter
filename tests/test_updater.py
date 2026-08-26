@@ -39,11 +39,20 @@ def update_environment(monkeypatch, tmp_path):
     return tmp_path / "updates"
 
 
-def _cached_project(root: Path, revision: str) -> Path:
+def _cached_project(
+    root: Path,
+    revision: str,
+    *,
+    selected: bool = False,
+    base_revision: str | None = None,
+) -> Path:
     project = root / revision
     project.mkdir(parents=True)
     (project / "pyproject.toml").write_text("[project]\nname='osint-recon'\n", encoding="utf-8")
-    (root / "pending.json").write_text(json.dumps({"revision": revision}), encoding="utf-8")
+    pending = {"revision": revision, "selected": selected}
+    if base_revision:
+        pending["base_revision"] = base_revision
+    (root / "pending.json").write_text(json.dumps(pending), encoding="utf-8")
     return project
 
 
@@ -346,7 +355,7 @@ def test_archive_download_rejects_oversized_response(monkeypatch, update_environ
 
 
 def test_apply_uses_exact_cached_revision(monkeypatch, update_environment):
-    project = _cached_project(update_environment, REVISION_B)
+    project = _cached_project(update_environment, REVISION_B, selected=True)
     monkeypatch.setattr(
         updater,
         "check_for_update",
@@ -375,7 +384,7 @@ def test_apply_uses_exact_cached_revision(monkeypatch, update_environment):
 
 
 def test_apply_preserves_pending_update_on_failure(monkeypatch, update_environment):
-    _cached_project(update_environment, REVISION_B)
+    _cached_project(update_environment, REVISION_B, selected=True)
     monkeypatch.setattr(
         updater, "check_for_update", lambda **_kwargs: updater.UpdateResult(attempted=True)
     )
@@ -394,7 +403,7 @@ def test_apply_preserves_pending_update_on_failure(monkeypatch, update_environme
 def test_apply_rejects_an_installation_that_cannot_import_specter(
     monkeypatch, update_environment
 ):
-    _cached_project(update_environment, REVISION_B)
+    _cached_project(update_environment, REVISION_B, selected=True)
     monkeypatch.setattr(
         updater.subprocess,
         "run",
@@ -410,7 +419,8 @@ def test_apply_rejects_an_installation_that_cannot_import_specter(
 
 
 def test_apply_can_use_cached_update_while_check_is_offline(monkeypatch, update_environment):
-    _cached_project(update_environment, REVISION_B)
+    _cached_project(update_environment, REVISION_B, base_revision=REVISION_A)
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
     monkeypatch.setattr(
         updater,
         "check_for_update",
@@ -425,10 +435,54 @@ def test_apply_can_use_cached_update_while_check_is_offline(monkeypatch, update_
     assert updater.apply_pending_update().applied
 
 
+def test_apply_refreshes_a_stale_automatic_download(monkeypatch, update_environment):
+    _cached_project(update_environment, REVISION_B, base_revision=REVISION_A)
+    replacement = update_environment / REVISION_C
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
+
+    def refresh(**_kwargs):
+        _cached_project(update_environment, REVISION_C, base_revision=REVISION_A)
+        return updater.UpdateResult(attempted=True, update_available=True, downloaded=True)
+
+    monkeypatch.setattr(updater, "check_for_update", refresh)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        updater.subprocess,
+        "run",
+        lambda command, **_kwargs: (
+            commands.append(command) or subprocess.CompletedProcess(command, 0, "", "")
+        ),
+    )
+    monkeypatch.setattr(updater, "_installation_is_healthy", lambda **_kwargs: True)
+
+    result = updater.apply_pending_update()
+
+    assert result.applied
+    assert commands[0][-1] == f"{replacement}[desktop]"
+
+
+def test_apply_refuses_unverified_legacy_automatic_download(
+    monkeypatch, update_environment
+):
+    _cached_project(update_environment, REVISION_B)
+    monkeypatch.setattr(updater, "_installed_revision", lambda: REVISION_A)
+    monkeypatch.setattr(
+        updater,
+        "check_for_update",
+        lambda **_kwargs: updater.UpdateResult(attempted=True, message="offline"),
+    )
+
+    result = updater.apply_pending_update()
+
+    assert not result.applied and result.update_available
+    assert "could not verify" in result.message
+    assert (update_environment / "pending.json").exists()
+
+
 def test_windows_apply_waits_for_exit_before_replacing_the_environment(
     monkeypatch, update_environment
 ):
-    project = _cached_project(update_environment, REVISION_B)
+    project = _cached_project(update_environment, REVISION_B, selected=True)
     scheduled = []
     monkeypatch.setattr(updater, "_requires_update_handoff", lambda: True)
     monkeypatch.setattr(
@@ -465,7 +519,7 @@ def test_windows_update_helper_verifies_before_recording_success():
 def test_windows_apply_preserves_download_when_handoff_cannot_start(
     monkeypatch, update_environment
 ):
-    _cached_project(update_environment, REVISION_B)
+    _cached_project(update_environment, REVISION_B, selected=True)
     monkeypatch.setattr(updater, "_requires_update_handoff", lambda: True)
     monkeypatch.setattr(
         updater,
