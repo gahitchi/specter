@@ -20,6 +20,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -689,9 +690,9 @@ async def search(
     )
 
     async def event_gen():
-        yield f"data: {json.dumps({'type': 'intake', 'intake': intake})}\n\n"
+        yield f"data: {json.dumps(jsonable_encoder({'type': 'intake', 'intake': intake}))}\n\n"
         async for event in run_stream(query, intake=intake):
-            yield f"data: {json.dumps(event)}\n\n"
+            yield f"data: {json.dumps(jsonable_encoder(event))}\n\n"
 
     return StreamingResponse(
         event_gen(),

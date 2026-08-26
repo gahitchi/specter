@@ -505,6 +505,20 @@ def test_launcher_exposes_the_platform_icon_path(capsys):
     assert icon_path.suffix == (".ico" if os.name == "nt" else ".png")
 
 
+def test_launcher_sets_a_stable_windows_taskbar_identity():
+    from recon import launch
+
+    calls = []
+
+    class Shell:
+        def SetCurrentProcessExplicitAppUserModelID(self, value):
+            calls.append(value)
+            return 0
+
+    assert launch._set_windows_app_identity(shell32=Shell())
+    assert calls == ["Specter.Desktop"]
+
+
 def test_launcher_prefers_the_gui_executable_beside_the_invoked_command(
     monkeypatch, tmp_path
 ):

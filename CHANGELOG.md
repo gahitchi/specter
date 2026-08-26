@@ -98,6 +98,10 @@ They were not published releases; their changes are included in 0.11.0.
   false-positive rate.
 - Updated installers, automatic updates, desktop links, project metadata, and
   container references to the canonical `gahitchi/specter` repository.
+- Kept live research streams connected when evidence contains temporal values
+  such as observation timestamps.
+- Assigned the native Windows process a stable Specter application identity so
+  the running window uses the product icon in the taskbar.
 
 ### Changed
 

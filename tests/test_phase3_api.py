@@ -1,6 +1,9 @@
 """Phase-3 web API: key vault endpoints (no secret leakage), module catalogue,
 and the discovery-graph endpoint."""
 
+from datetime import datetime, timezone
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -147,6 +150,29 @@ def test_scan_treats_typed_clues_as_one_query(monkeypatch):
     )
     assert seen["intake"]["kind"] == "multiple"
     assert set(seen["intake"]["query_fields"]) == {"name", "username", "email"}
+
+
+def test_live_search_serializes_temporal_datetimes(monkeypatch):
+    observed_at = datetime(2026, 8, 26, 16, 30, tzinfo=timezone.utc)
+
+    async def fake_run_stream(query, **_kwargs):
+        assert query.username == "alice"
+        yield {
+            "type": "finding",
+            "finding": {"temporal": {"observed_at": observed_at}},
+        }
+
+    monkeypatch.setattr(server, "run_stream", fake_run_stream)
+
+    response = client.get("/api/search?username=alice")
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+
+    assert response.status_code == 200
+    assert events[1]["finding"]["temporal"]["observed_at"] == observed_at.isoformat()
 
 
 def test_module_catalogue_marks_keyed_vs_keyless():

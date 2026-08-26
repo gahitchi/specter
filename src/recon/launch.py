@@ -35,6 +35,7 @@ CLI_COMMANDS = frozenset({
     "serve", "source-check", "source-pack", "sources", "targets", "user-add",
     "user-list", "user-update", "worker",
 })
+WINDOWS_APP_USER_MODEL_ID = "Specter.Desktop"
 
 
 def _icon_path() -> Path:
@@ -44,6 +45,25 @@ def _icon_path() -> Path:
 
 def _installed_tool_environment() -> bool:
     return Path(sys.prefix).name.casefold().replace("_", "-") == "osint-recon"
+
+
+def _set_windows_app_identity(*, shell32=None) -> bool:
+    """Give the Python-hosted window a stable Windows taskbar identity."""
+    if shell32 is None:
+        if os.name != "nt":
+            return False
+        try:
+            from ctypes import windll
+
+            shell32 = windll.shell32
+        except (AttributeError, ImportError, OSError):
+            return False
+    try:
+        return shell32.SetCurrentProcessExplicitAppUserModelID(
+            WINDOWS_APP_USER_MODEL_ID
+        ) == 0
+    except (AttributeError, OSError):
+        return False
 
 
 def _application_executable() -> Path | None:
@@ -294,6 +314,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.icon_path:
         _output(str(_icon_path()))
         return
+
+    if not args.headless and not args.update:
+        _set_windows_app_identity()
 
     if not args.headless and not args.update and _installed_tool_environment():
         _refresh_platform_integration()
