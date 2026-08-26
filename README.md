@@ -79,7 +79,7 @@ The dashboard binds to `127.0.0.1` by default and rejects untrusted hosts,
 cross-site requests, and non-JSON mutations. Remote mode is a separate gated
 configuration with authentication, CSRF protection, TLS, and explicit trusted
 hosts. See
-[`SECURITY.md`](https://github.com/gahitchi/osint-recon/blob/main/SECURITY.md)
+[`SECURITY.md`](https://github.com/gahitchi/specter/blob/main/SECURITY.md)
 for the security model and reporting process.
 
 ## Quick start
@@ -91,13 +91,13 @@ administrator or root access is not required.
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/install.ps1 | iex
+irm https://raw.githubusercontent.com/gahitchi/specter/gpt-branch/install.ps1 | iex
 ```
 
 Arch Linux:
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/install.sh | bash
+curl -LsSf https://raw.githubusercontent.com/gahitchi/specter/gpt-branch/install.sh | bash
 ```
 
 Existing installations should run the matching installer once more after this
@@ -141,11 +141,11 @@ The Python distribution retains the compatibility name `osint-recon`. Use the
 matching one-command uninstaller to remove the application and both launchers:
 
 ```powershell
-irm https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/gahitchi/specter/gpt-branch/uninstall.ps1 | iex
 ```
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/uninstall.sh | bash
+curl -LsSf https://raw.githubusercontent.com/gahitchi/specter/gpt-branch/uninstall.sh | bash
 ```
 
 Uninstalling leaves investigation databases and settings in place.
@@ -169,8 +169,8 @@ For development, [`uv`](https://docs.astral.sh/uv/) is the recommended
 environment and lockfile manager:
 
 ```bash
-git clone https://github.com/gahitchi/osint-recon.git
-cd osint-recon
+git clone https://github.com/gahitchi/specter.git
+cd specter
 uv sync --extra desktop
 
 uv run specter scan torvalds
@@ -378,7 +378,7 @@ uv run specter
 For an isolated branch install, use:
 
 ```bash
-pipx install --force 'osint-recon[desktop,maigret] @ git+https://github.com/gahitchi/osint-recon.git@gpt-branch'
+pipx install --force 'osint-recon[desktop,maigret] @ git+https://github.com/gahitchi/specter.git@gpt-branch'
 ```
 
 The adapter's outbound site probes are governed by its own hard limits and are
@@ -589,7 +589,7 @@ Externally verified cases require an authorized subject or controlled asset, a
 reviewer independent of Specter development, a blind review, the verification
 method, and the review date. Create that workflow with `--mode independent`.
 The packaged dataset and operator pilots always report `NEEDS_EVIDENCE`. See
-[`EVALUATION.md`](https://github.com/gahitchi/osint-recon/blob/main/EVALUATION.md)
+[`EVALUATION.md`](https://github.com/gahitchi/specter/blob/main/EVALUATION.md)
 for the sampling and review protocol.
 
 `diagnostics` produces a redacted installation report covering packaged assets,
@@ -607,7 +607,7 @@ uv run specter maturity
 Canary configuration contains operator-designated test artifacts and is never
 included in the repository. Default CI runs contract and parser tests without
 sending identities to live sources. See
-[`MATURITY.md`](https://github.com/gahitchi/osint-recon/blob/main/MATURITY.md).
+[`MATURITY.md`](https://github.com/gahitchi/specter/blob/main/MATURITY.md).
 
 Confidence scores are deterministic and explainable, but they are not universal
 probabilities until validated against representative ground truth for the
@@ -702,12 +702,12 @@ gate.
 Versioned multi-architecture images are published to GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/gahitchi/osint-recon:0.11.0
-docker run --rm ghcr.io/gahitchi/osint-recon:0.11.0 --help
+docker pull ghcr.io/gahitchi/specter:0.11.0
+docker run --rm ghcr.io/gahitchi/specter:0.11.0 --help
 ```
 
 Follow
-[`PRODUCTION.md`](https://github.com/gahitchi/osint-recon/blob/main/PRODUCTION.md)
+[`PRODUCTION.md`](https://github.com/gahitchi/specter/blob/main/PRODUCTION.md)
 for artifact verification, secret generation, bootstrap, health checks,
 metrics, backup/restore drills, upgrades, and incident response. The included
 `compose.production.yaml` accepts a complete tagged or digest-pinned image
@@ -731,13 +731,13 @@ security audits. Weekly scheduled CI remains offline; live source canaries are
 run only after the operator explicitly authorizes their configured artifacts.
 
 Release history and support commitments live in
-[`CHANGELOG.md`](https://github.com/gahitchi/osint-recon/blob/main/CHANGELOG.md),
-[`SUPPORT.md`](https://github.com/gahitchi/osint-recon/blob/main/SUPPORT.md), and
-[`RELEASING.md`](https://github.com/gahitchi/osint-recon/blob/main/RELEASING.md).
+[`CHANGELOG.md`](https://github.com/gahitchi/specter/blob/main/CHANGELOG.md),
+[`SUPPORT.md`](https://github.com/gahitchi/specter/blob/main/SUPPORT.md), and
+[`RELEASING.md`](https://github.com/gahitchi/specter/blob/main/RELEASING.md).
 Contributions follow
-[`CONTRIBUTING.md`](https://github.com/gahitchi/osint-recon/blob/main/CONTRIBUTING.md)
+[`CONTRIBUTING.md`](https://github.com/gahitchi/specter/blob/main/CONTRIBUTING.md)
 and the
-[`CODE_OF_CONDUCT.md`](https://github.com/gahitchi/osint-recon/blob/main/CODE_OF_CONDUCT.md).
+[`CODE_OF_CONDUCT.md`](https://github.com/gahitchi/specter/blob/main/CODE_OF_CONDUCT.md).
 
 The curated site rules are based on the WhatsMyName schema and carry the
 attribution recorded in the dataset. The application code is MIT licensed.

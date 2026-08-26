@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PACKAGE_SPEC='osint-recon[desktop] @ git+https://github.com/gahitchi/osint-recon.git@gpt-branch'
+PACKAGE_SPEC='osint-recon[desktop] @ git+https://github.com/gahitchi/specter.git@gpt-branch'
 
 if ! command -v curl >/dev/null 2>&1; then
   printf 'curl is required. Install it with: sudo pacman -S curl\n' >&2
@@ -65,7 +65,7 @@ fi
 printf 'Specter installed successfully. While running, it checks for updates every 5 minutes.\n'
 printf 'Open Specter from the desktop, application menu, or launch it with: specter\n'
 printf 'Apply a downloaded update with: specter --update\n'
-printf 'Uninstall with: curl -LsSf https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/uninstall.sh | bash\n'
+printf 'Uninstall with: curl -LsSf https://raw.githubusercontent.com/gahitchi/specter/gpt-branch/uninstall.sh | bash\n'
 
 case ":$PATH:" in
   *":$bin_directory:"*) ;;

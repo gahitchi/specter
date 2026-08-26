@@ -47,13 +47,13 @@ the digest in `.env`:
 
 ```bash
 gh attestation verify \
-  oci://ghcr.io/gahitchi/osint-recon:0.11.0 \
-  --repo gahitchi/osint-recon
-docker buildx imagetools inspect ghcr.io/gahitchi/osint-recon:0.11.0
-docker pull ghcr.io/gahitchi/osint-recon:0.11.0
+  oci://ghcr.io/gahitchi/specter:0.11.0 \
+  --repo gahitchi/specter
+docker buildx imagetools inspect ghcr.io/gahitchi/specter:0.11.0
+docker pull ghcr.io/gahitchi/specter:0.11.0
 ```
 
-Use `RECON_IMAGE_REF=ghcr.io/gahitchi/osint-recon@sha256:...` for deployment.
+Use `RECON_IMAGE_REF=ghcr.io/gahitchi/specter@sha256:...` for deployment.
 The tagged default is convenient for initial evaluation, but production should
 not depend on a mutable tag. The PostgreSQL, Redis, and Caddy defaults are
 digest-pinned and can be upgraded through their corresponding `*_IMAGE_REF`

@@ -19,8 +19,8 @@ uncertainty, and fail-closed production behavior.
 Python 3.10 through 3.14 and `uv` are supported.
 
 ```bash
-git clone https://github.com/gahitchi/osint-recon.git
-cd osint-recon
+git clone https://github.com/gahitchi/specter.git
+cd specter
 uv sync --locked --all-extras
 uv run pytest -q
 uv run ruff check .

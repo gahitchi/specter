@@ -70,11 +70,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/gahitchi/osint-recon"
-Documentation = "https://github.com/gahitchi/osint-recon/blob/main/README.md"
-Repository = "https://github.com/gahitchi/osint-recon.git"
-Issues = "https://github.com/gahitchi/osint-recon/issues"
-Changelog = "https://github.com/gahitchi/osint-recon/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/gahitchi/specter"
+Documentation = "https://github.com/gahitchi/specter/blob/main/README.md"
+Repository = "https://github.com/gahitchi/specter.git"
+Issues = "https://github.com/gahitchi/specter/issues"
+Changelog = "https://github.com/gahitchi/specter/blob/main/CHANGELOG.md"
 
 [project.scripts]
 recon = "recon.cli:main"

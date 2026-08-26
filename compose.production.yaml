@@ -1,6 +1,6 @@
-name: osint-recon
+name: specter
 
-x-app-image: &app-image ${RECON_IMAGE_REF:-ghcr.io/gahitchi/osint-recon:0.11.0}
+x-app-image: &app-image ${RECON_IMAGE_REF:-ghcr.io/gahitchi/specter:0.11.0}
 
 x-app-environment: &app-environment
   RECON_ENV: production

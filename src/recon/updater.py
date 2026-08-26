@@ -22,13 +22,13 @@ import urllib.request
 PACKAGE_NAME = "osint-recon"  # Compatibility identifier used by existing installs.
 PRODUCT_NAME = "Specter"
 UPDATE_INTERVAL_SECONDS = 300.0
-GITHUB_API_URL = "https://api.github.com/repos/gahitchi/osint-recon/commits/gpt-branch"
+GITHUB_API_URL = "https://api.github.com/repos/gahitchi/specter/commits/gpt-branch"
 GITHUB_COMMITS_URL = (
-    "https://api.github.com/repos/gahitchi/osint-recon/commits?sha=gpt-branch&per_page={limit}"
+    "https://api.github.com/repos/gahitchi/specter/commits?sha=gpt-branch&per_page={limit}"
 )
-GITHUB_ARCHIVE_URL = "https://github.com/gahitchi/osint-recon/archive/{revision}.tar.gz"
+GITHUB_ARCHIVE_URL = "https://github.com/gahitchi/specter/archive/{revision}.tar.gz"
 GITHUB_ARCHIVE_URLS = (
-    "https://codeload.github.com/gahitchi/osint-recon/tar.gz/{revision}",
+    "https://codeload.github.com/gahitchi/specter/tar.gz/{revision}",
     GITHUB_ARCHIVE_URL,
 )
 _MAX_ARCHIVE_BYTES = 100 * 1024 * 1024

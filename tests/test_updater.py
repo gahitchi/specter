@@ -18,6 +18,17 @@ REVISION_B = "b" * 40
 REVISION_C = "c" * 40
 
 
+def test_update_urls_use_canonical_repository():
+    urls = [
+        updater.GITHUB_API_URL,
+        updater.GITHUB_COMMITS_URL,
+        updater.GITHUB_ARCHIVE_URL,
+        *updater.GITHUB_ARCHIVE_URLS,
+    ]
+    assert all("gahitchi/specter" in url for url in urls)
+    assert all("gahitchi/osint-recon" not in url for url in urls)
+
+
 @pytest.fixture
 def update_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("SPECTER_UPDATE_DIR", str(tmp_path / "updates"))

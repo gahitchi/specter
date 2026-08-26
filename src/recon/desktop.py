@@ -663,14 +663,14 @@ class SpecterWindow(QMainWindow):
             help_menu,
             "Documentation",
             lambda: QDesktopServices.openUrl(
-                QUrl("https://github.com/gahitchi/osint-recon/tree/gpt-branch#readme")
+                QUrl("https://github.com/gahitchi/specter/tree/gpt-branch#readme")
             ),
         )
         self._action(
             help_menu,
             "Report an Issue",
             lambda: QDesktopServices.openUrl(
-                QUrl("https://github.com/gahitchi/osint-recon/issues/new")
+                QUrl("https://github.com/gahitchi/specter/issues/new")
             ),
         )
         help_menu.addSeparator()

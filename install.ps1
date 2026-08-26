@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$PackageSpec = "osint-recon[desktop] @ git+https://github.com/gahitchi/osint-recon.git@gpt-branch"
+$PackageSpec = "osint-recon[desktop] @ git+https://github.com/gahitchi/specter.git@gpt-branch"
 
 function Find-Uv {
     $Command = Get-Command uv -ErrorAction SilentlyContinue
@@ -69,7 +69,7 @@ New-SpecterShortcut (Join-Path $Desktop "Specter.lnk")
 Write-Host "Specter installed successfully. While running, it checks for updates every 5 minutes."
 Write-Host "Open Specter from the desktop, Start menu, or launch it with: specter"
 Write-Host "Apply a downloaded update with: specter --update"
-Write-Host "Uninstall with: irm https://raw.githubusercontent.com/gahitchi/osint-recon/gpt-branch/uninstall.ps1 | iex"
+Write-Host "Uninstall with: irm https://raw.githubusercontent.com/gahitchi/specter/gpt-branch/uninstall.ps1 | iex"
 
 if (-not $NoLaunch) {
     Start-Process -FilePath $SpecterApp -ArgumentList "--no-update"

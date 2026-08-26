@@ -96,6 +96,9 @@ They were not published releases; their changes are included in 0.11.0.
   recorded same-page identity reassignment as a high-severity contradiction.
 - Tightened release and identity-model gates to 99% precision and a maximum 1%
   false-positive rate.
+- Updated installers, automatic updates, desktop links, project metadata, and
+  container references to the canonical `gahitchi/specter` repository.
+
 ### Changed
 
 - Specter is now the product name and primary command. Legacy package, command,

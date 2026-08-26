@@ -74,7 +74,7 @@ class Settings:
     # --- HTTP ---
     user_agent: str = (
         f"Specter/{__version__} "
-        "(+https://github.com/gahitchi/osint-recon; authorized research only)"
+        "(+https://github.com/gahitchi/specter; authorized research only)"
     )
     request_timeout: float = 12.0
     max_concurrency: int = 24
