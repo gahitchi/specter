@@ -32,6 +32,7 @@ def test_platform_installers_create_and_remove_desktop_and_menu_launchers():
     assert "SpecialFolder]::DesktopDirectory" in windows_install
     assert 'Join-Path $env:LOCALAPPDATA "Specter\\assets"' in windows_install
     assert "Copy-Item -LiteralPath $IconPath -Destination $StableIconPath" in windows_install
+    assert "Remove-Item -LiteralPath $Path -Force" in windows_install
     assert '$Shortcut.IconLocation = "$StableIconPath,0"' in windows_install
     assert "SpecialFolder]::Programs" in windows_uninstall
     assert "SpecialFolder]::DesktopDirectory" in windows_uninstall

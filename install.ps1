@@ -59,6 +59,7 @@ function New-SpecterShortcut {
     if (-not (Test-Path -LiteralPath $Parent)) {
         New-Item -ItemType Directory -Path $Parent -Force | Out-Null
     }
+    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
     $Shell = New-Object -ComObject WScript.Shell
     $Shortcut = $Shell.CreateShortcut($Path)
     $Shortcut.TargetPath = $SpecterApp
