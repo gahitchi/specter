@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark" />
   <title>New investigation - Specter</title>
   <link rel="icon" type="image/png" href="/icon.png?v=bfaef8a7a5e4" />
-  <link rel="stylesheet" href="/static/style.css?v=b3de131c03ad" />
+  <link rel="stylesheet" href="/static/style.css?v=0c022a191f68" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to workspace</a>
@@ -221,31 +221,65 @@
           <section id="scan-stage-evidence" class="results-workspace scan-stage" data-scan-stage="evidence" role="tabpanel" aria-labelledby="scan-view-evidence" hidden>
             <div class="results-toolbar">
               <div>
-                <span class="eyebrow">Current scan</span>
-                <h3 id="results-heading">Evidence</h3>
+                <span class="eyebrow">Research results</span>
+                <h3 id="results-heading">What Specter learned</h3>
+              </div>
+              <span id="results-reading-status" class="status-text" role="status" aria-live="polite">No results yet</span>
+            </div>
+
+            <div class="result-view-tabs" role="tablist" aria-label="Result views">
+              <button type="button" id="result-view-overview-tab" class="active" data-result-view-target="overview" role="tab" aria-selected="true" aria-controls="result-view-overview">Overview</button>
+              <button type="button" id="result-view-mentions-tab" data-result-view-target="mentions" role="tab" aria-selected="false" aria-controls="result-view-mentions" hidden>Public mentions <span id="result-mentions-count" class="stage-count">0</span></button>
+              <button type="button" id="result-view-checks-tab" data-result-view-target="checks" role="tab" aria-selected="false" aria-controls="result-view-checks">All checks <span id="result-checks-count" class="stage-count">0</span></button>
+            </div>
+
+            <section id="result-view-overview" class="result-view active" data-result-view="overview" role="tabpanel" aria-labelledby="result-view-overview-tab">
+              <div id="results-overview-empty" class="empty-state">
+                <strong>No conclusion yet</strong>
+                <span>Specter will organize the result when the research is complete.</span>
+              </div>
+              <section id="profile" class="profile-region" hidden aria-label="Synthesized profile"></section>
+              <section id="summary" class="summary-region"></section>
+              <section id="live-reasoning" class="reasoning-region" hidden aria-label="Investigation reasoning"></section>
+            </section>
+
+            <section id="result-view-mentions" class="result-view" data-result-view="mentions" role="tabpanel" aria-labelledby="result-view-mentions-tab" hidden>
+              <div class="reading-heading">
+                <div><span class="eyebrow">Pages that mention the number</span><h3>Public mentions</h3><p>Grouped by what each page can and cannot establish about the number.</p></div>
+                <label class="result-search"><span>Find a page or detail</span><input id="mention-search" type="search" placeholder="Search mentions" /></label>
+              </div>
+              <div class="mention-filters" role="group" aria-label="Filter public mentions">
+                <button type="button" class="active" data-mention-filter="all" aria-pressed="true">All <span data-mention-count="all">0</span></button>
+                <button type="button" data-mention-filter="lead" aria-pressed="false">Person leads <span data-mention-count="lead">0</span></button>
+                <button type="button" data-mention-filter="review" aria-pressed="false">Needs review <span data-mention-count="review">0</span></button>
+                <button type="button" data-mention-filter="context" aria-pressed="false">Context only <span data-mention-count="context">0</span></button>
+              </div>
+              <div id="phone-mentions-explorer" class="mentions-explorer"></div>
+            </section>
+
+            <section id="result-view-checks" class="result-view" data-result-view="checks" role="tabpanel" aria-labelledby="result-view-checks-tab" hidden>
+              <div class="reading-heading checks-heading">
+                <div><span class="eyebrow">Complete source record</span><h3>Every check</h3><p>Use this view when you need to audit a source or understand a classification.</p></div>
+                <label class="result-search"><span>Find a source or result</span><input id="evidence-search" type="search" placeholder="Search all checks" /></label>
               </div>
               <div class="verdict-filters" role="group" aria-label="Filter by verdict">
                 <button type="button" class="active" data-verdict-filter="ALL" aria-pressed="true">All <span data-verdict-count="ALL">0</span></button>
-                <button type="button" data-verdict-filter="FOUND" aria-pressed="false">Found <span data-verdict-count="FOUND">0</span></button>
+                <button type="button" data-verdict-filter="FOUND" aria-pressed="false">Observed <span data-verdict-count="FOUND">0</span></button>
                 <button type="button" data-verdict-filter="UNCERTAIN" aria-pressed="false">Uncertain <span data-verdict-count="UNCERTAIN">0</span></button>
-                <button type="button" data-verdict-filter="UNVERIFIABLE" aria-pressed="false">Blocked <span data-verdict-count="UNVERIFIABLE">0</span></button>
+                <button type="button" data-verdict-filter="UNVERIFIABLE" aria-pressed="false">Unavailable <span data-verdict-count="UNVERIFIABLE">0</span></button>
                 <button type="button" data-verdict-filter="ERROR" aria-pressed="false">Errors <span data-verdict-count="ERROR">0</span></button>
-                <button type="button" data-verdict-filter="NOT_FOUND" aria-pressed="false">Not found <span data-verdict-count="NOT_FOUND">0</span></button>
+                <button type="button" data-verdict-filter="NOT_FOUND" aria-pressed="false">Not observed <span data-verdict-count="NOT_FOUND">0</span></button>
               </div>
-            </div>
-            <div id="results-empty" class="empty-state">
-              <strong>Awaiting scan</strong>
-              <span>No evidence in the current workspace.</span>
-            </div>
-            <div class="table-wrap">
-              <table id="results" hidden>
-                <thead><tr><th>Verdict</th><th>Confidence</th><th>Source</th><th>Evidence</th><th>Reasoning</th></tr></thead>
-                <tbody></tbody>
-              </table>
-            </div>
-            <section id="profile" class="profile-region" hidden aria-label="Synthesized profile"></section>
-            <section id="summary" class="summary-region"></section>
-            <section id="live-reasoning" class="reasoning-region" hidden aria-label="Investigation reasoning"></section>
+              <div id="results-empty" class="empty-state">
+                <strong>Awaiting research</strong>
+                <span>No source checks in the current workspace.</span>
+              </div>
+              <div id="results" class="evidence-list" hidden aria-live="polite"></div>
+              <div id="results-filter-empty" class="empty-state compact-empty" hidden>
+                <strong>No matching checks</strong>
+                <span>Try another filter or search term.</span>
+              </div>
+            </section>
           </section>
         </section>
 
@@ -456,6 +490,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=744d18f94c58"></script>
+  <script src="/static/app.js?v=0e5b3f1d9d01"></script>
 </body>
 </html>

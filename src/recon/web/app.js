@@ -241,6 +241,8 @@ function renderIntake(intake) {
 
 const verdictCounts = { ALL: 0, FOUND: 0, UNCERTAIN: 0, UNVERIFIABLE: 0, ERROR: 0, NOT_FOUND: 0 };
 let activeVerdictFilter = "ALL";
+let activeResultView = "overview";
+let activeMentionFilter = "all";
 
 function setScanStatus(message, tone = "neutral") {
   const status = $("#status");
@@ -259,12 +261,22 @@ function updateVerdictCounts() {
     item.textContent = verdictCounts[item.dataset.verdictCount] || 0;
   });
   $("#scan-evidence-count").textContent = verdictCounts.ALL;
+  $("#result-checks-count").textContent = verdictCounts.ALL;
+  $("#results-reading-status").textContent = verdictCounts.ALL
+    ? `${verdictCounts.FOUND} observed across ${verdictCounts.ALL} source checks`
+    : "No results yet";
 }
 
 function applyVerdictFilter() {
-  $("#results").querySelectorAll("tbody tr").forEach((row) => {
-    row.hidden = activeVerdictFilter !== "ALL" && row.dataset.verdict !== activeVerdictFilter;
+  const query = $("#evidence-search").value.trim().toLocaleLowerCase();
+  let visible = 0;
+  $("#results").querySelectorAll("[data-evidence-row]").forEach((row) => {
+    const matchesVerdict = activeVerdictFilter === "ALL" || row.dataset.verdict === activeVerdictFilter;
+    const matchesQuery = !query || row.dataset.search.includes(query);
+    row.hidden = !(matchesVerdict && matchesQuery);
+    if (!row.hidden) visible += 1;
   });
+  $("#results-filter-empty").hidden = visible > 0 || verdictCounts.ALL === 0;
 }
 
 function selectVerdictFilter(filter) {
@@ -277,16 +289,66 @@ function selectVerdictFilter(filter) {
   applyVerdictFilter();
 }
 
+function setResultView(view, { focus = false } = {}) {
+  const selectedButton = document.querySelector(`[data-result-view-target="${view}"]`);
+  if (!selectedButton || selectedButton.hidden) return;
+  activeResultView = view;
+  document.querySelectorAll("[data-result-view-target]").forEach((button) => {
+    const selected = button === selectedButton;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  document.querySelectorAll("[data-result-view]").forEach((panel) => {
+    const selected = panel.dataset.resultView === view;
+    panel.hidden = !selected;
+    panel.classList.toggle("active", selected);
+  });
+  if (focus) selectedButton.focus();
+}
+
+document.querySelectorAll("[data-result-view-target]").forEach((button) => {
+  button.addEventListener("click", () => setResultView(button.dataset.resultViewTarget));
+  button.addEventListener("keydown", (event) => {
+    const tabs = [...document.querySelectorAll("[data-result-view-target]:not([hidden])")];
+    const current = tabs.indexOf(button);
+    let next = current;
+    if (event.key === "ArrowRight") next = (current + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") next = (current - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    setResultView(tabs[next].dataset.resultViewTarget, { focus: true });
+  });
+});
+
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-open-result-view]");
+  if (trigger) setResultView(trigger.dataset.openResultView, { focus: true });
+});
+
+$("#evidence-search").addEventListener("input", applyVerdictFilter);
+
 function resetResults() {
-  $("#results").querySelector("tbody").innerHTML = "";
+  $("#results").innerHTML = "";
   $("#summary").innerHTML = "";
   $("#profile").innerHTML = "";
   $("#profile").hidden = true;
+  $("#results-overview-empty").hidden = false;
+  $("#phone-mentions-explorer").innerHTML = "";
+  $("#result-view-mentions-tab").hidden = true;
+  $("#result-mentions-count").textContent = "0";
+  $("#mention-search").value = "";
+  $("#evidence-search").value = "";
   Object.keys(verdictCounts).forEach((key) => { verdictCounts[key] = 0; });
   updateVerdictCounts();
   selectVerdictFilter("ALL");
+  selectMentionFilter("all");
+  setResultView("overview");
   $("#results").hidden = true;
   $("#results-empty").hidden = false;
+  $("#results-filter-empty").hidden = true;
   $("#live-reasoning").hidden = true;
   $("#live-reasoning").innerHTML = "";
   resetLiveGraph();
@@ -488,18 +550,31 @@ function traceHtml(t) {
 }
 
 function addRow(f) {
-  const tr = document.createElement("tr");
-  tr.className = f.verdict;
-  tr.dataset.verdict = f.verdict;
+  const item = document.createElement("article");
+  item.className = `evidence-item ${f.verdict}`;
+  item.dataset.verdict = f.verdict;
+  item.dataset.evidenceRow = "";
   const url = safeHttpUrl(f.url);
   const label = url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(f.label)}</a>` : esc(f.label);
-  const reasons = (f.reasons || []).map(esc).join("<br>") + breakdownHtml(f.breakdown) + traceHtml(f.trace);
-  tr.innerHTML = `<td><span class="v ${f.verdict}">${f.verdict}</span></td><td>${f.confidence.toFixed(2)}</td>
-    <td>${esc(f.source)}</td><td>${label}</td><td class="reasons">${reasons}</td>`;
-  const tbody = $("#results").querySelector("tbody");
-  const rows = [...tbody.children];
-  const idx = rows.findIndex((row) => order[row.className] > order[f.verdict]);
-  if (idx === -1) tbody.appendChild(tr); else tbody.insertBefore(tr, rows[idx]);
+  const source = String(f.source || "Unknown source").replaceAll(":", " / ");
+  const reasons = (f.reasons || []).map(reason => `<li>${esc(reason)}</li>`).join("");
+  const verdictLabel = {
+    FOUND: "Observed", UNCERTAIN: "Uncertain", UNVERIFIABLE: "Unavailable",
+    ERROR: "Error", NOT_FOUND: "Not observed",
+  }[f.verdict] || String(f.verdict || "Result");
+  const confidence = Math.round(Number(f.confidence || 0) * 100);
+  item.dataset.search = [f.source, f.label, f.url, ...(f.reasons || [])]
+    .filter(Boolean).join(" ").toLocaleLowerCase();
+  item.innerHTML = `<div class="evidence-item-main"><span class="v ${esc(f.verdict)}">${esc(verdictLabel)}</span>`
+    + `<div class="evidence-identity"><h4>${label}</h4><span>${esc(source)}</span></div>`
+    + `<div class="evidence-strength"><strong>${confidence}%</strong><span>source confidence</span></div></div>`
+    + `<details class="evidence-explanation"><summary>Why Specter classified this</summary>`
+    + `<div class="evidence-explanation-body">${reasons ? `<ul>${reasons}</ul>` : "<p>No explanation was recorded.</p>"}`
+    + `${breakdownHtml(f.breakdown)}${traceHtml(f.trace)}</div></details>`;
+  const root = $("#results");
+  const rows = [...root.children];
+  const idx = rows.findIndex((row) => order[row.dataset.verdict] > order[f.verdict]);
+  if (idx === -1) root.appendChild(item); else root.insertBefore(item, rows[idx]);
   verdictCounts.ALL += 1;
   if (Object.hasOwn(verdictCounts, f.verdict)) verdictCounts[f.verdict] += 1;
   updateVerdictCounts();
@@ -511,7 +586,7 @@ function addRow(f) {
 function renderSummary(s) {
   renderProfile(s && s.profile);
   if (!s || !s.clusters || !s.clusters.length) { $("#summary").innerHTML = ""; return; }
-  let html = `<h2>Identities (${s.identities})</h2>`;
+  let html = `<details class="reading-curtain technical-summary"><summary><span><strong>Identity clustering</strong><small>${esc(s.identities)} possible ${s.identities === 1 ? "identity" : "identities"} assembled from the evidence</small></span></summary><div class="reading-curtain-body">`;
   for (const c of s.clusters) {
     const sig = Object.entries(c.signals || {}).map(([k, v]) => `${k}: ${[].concat(v).join(", ")}`).join(" · ") || "—";
     const flags = (c.flags && c.flags.length) ? `<span class="flag">${esc(c.flags.join(", "))}</span>` : "";
@@ -525,7 +600,7 @@ function renderSummary(s) {
     }
     html += `<div class="cluster"><b>#${c.id} ${esc(c.label||"")}</b> · score ${c.score} · ${c.found} found / ${c.uncertain} uncertain ${flags} ${corro}<br><small>${esc(sig)}</small></div>`;
   }
-  $("#summary").innerHTML = html;
+  $("#summary").innerHTML = html + "</div></details>";
 }
 
 function profileValue(value) {
@@ -534,23 +609,132 @@ function profileValue(value) {
   return String(value == null ? "" : value);
 }
 
+function readableToken(value) {
+  return String(value || "").replaceAll("_", " ");
+}
+
+function phoneMentionKind(item) {
+  if (item.identity_candidate && item.temporal_status !== "historical") return "lead";
+  if (item.temporal_status === "historical"
+      || ["historical", "personal_mention", "unresolved_mention"].includes(item.association)) return "review";
+  return "context";
+}
+
+function applyMentionFilter() {
+  const query = $("#mention-search").value.trim().toLocaleLowerCase();
+  let totalVisible = 0;
+  $("#phone-mentions-explorer").querySelectorAll("[data-mention-row]").forEach((item) => {
+    const matchesKind = activeMentionFilter === "all" || item.dataset.mentionKind === activeMentionFilter;
+    const matchesQuery = !query || item.dataset.search.includes(query);
+    item.hidden = !(matchesKind && matchesQuery);
+    if (!item.hidden) totalVisible += 1;
+  });
+  $("#phone-mentions-explorer").querySelectorAll("[data-mention-group]").forEach((group) => {
+    group.hidden = !group.querySelector("[data-mention-row]:not([hidden])");
+  });
+  const empty = $("#phone-mentions-explorer").querySelector("[data-mentions-empty]");
+  if (empty) empty.hidden = totalVisible > 0;
+}
+
+function selectMentionFilter(filter) {
+  activeMentionFilter = filter;
+  document.querySelectorAll("[data-mention-filter]").forEach((button) => {
+    const selected = button.dataset.mentionFilter === filter;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  applyMentionFilter();
+}
+
+document.querySelectorAll("[data-mention-filter]").forEach((button) => {
+  button.addEventListener("click", () => selectMentionFilter(button.dataset.mentionFilter));
+});
+$("#mention-search").addEventListener("input", applyMentionFilter);
+
+function renderPhoneMentions(phone) {
+  const root = $("#phone-mentions-explorer");
+  const mentions = phone.mentions || [];
+  const groups = {
+    lead: {
+      title: "Possible person-level leads",
+      description: "These pages contain structured person information, but still require independent agreement.",
+      items: [],
+    },
+    review: {
+      title: "Needs human review",
+      description: "These mentions may be historical, ambiguous, or missing enough context to connect safely.",
+      items: [],
+    },
+    context: {
+      title: "Context only",
+      description: "Directories, organizations, and services can explain where a number appears without identifying its subscriber.",
+      items: [],
+    },
+  };
+  mentions.forEach((item) => groups[phoneMentionKind(item)].items.push(item));
+  const counts = {
+    all: mentions.length,
+    lead: groups.lead.items.length,
+    review: groups.review.items.length,
+    context: groups.context.items.length,
+  };
+  document.querySelectorAll("[data-mention-count]").forEach((item) => {
+    item.textContent = counts[item.dataset.mentionCount] || 0;
+  });
+  $("#result-mentions-count").textContent = mentions.length;
+  $("#result-view-mentions-tab").hidden = !mentions.length;
+  root.innerHTML = Object.entries(groups).map(([kind, group]) => {
+    const rows = group.items.map((item) => {
+      const url = safeHttpUrl(item.url);
+      const title = url
+        ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(item.title || item.domain || "Public mention")}</a>`
+        : `<span>${esc(item.title || item.domain || "Public mention")}</span>`;
+      const structured = item.structured_identity || {};
+      const structuredRows = Object.entries(structured).map(([key, value]) =>
+        `<div><span>${esc(readableToken(key))}</span><strong>${esc(profileValue(value))}</strong></div>`
+      ).join("");
+      const confidence = Math.round(Number(item.confidence || 0) * 100);
+      const search = [item.title, item.domain, item.context, item.association, item.source_kind,
+        ...Object.values(structured).map(profileValue)].filter(Boolean).join(" ").toLocaleLowerCase();
+      return `<article class="mention-item mention-${kind}" data-mention-row data-mention-kind="${kind}" data-search="${esc(search)}">`
+        + `<div class="mention-item-head"><div><span class="mention-domain">${esc(item.domain || "Public web")}</span><h4>${title}</h4></div>`
+        + `<span class="mention-kind">${esc(readableToken(item.association || "unresolved mention"))}</span></div>`
+        + `<div class="mention-meta"><span>${esc(readableToken(item.source_kind || "public page"))}</span>`
+        + `<span>${esc(readableToken(item.temporal_status || "current"))}</span><span>${confidence}% page-match confidence</span></div>`
+        + `${item.context ? `<p class="mention-context">${esc(item.context)}</p>` : ""}`
+        + (structuredRows ? `<details class="mention-extracted"><summary>Person fields extracted from this page</summary><div>${structuredRows}</div><p>Treat these as candidates until another independent source agrees.</p></details>` : "")
+        + `</article>`;
+    }).join("");
+    return `<section class="mention-group" data-mention-group="${kind}"${rows ? "" : " hidden"}>`
+      + `<header><div><h4>${group.title}</h4><p>${group.description}</p></div><span>${group.items.length}</span></header>`
+      + `<div class="mention-group-list">${rows}</div></section>`;
+  }).join("") + `<div class="empty-state compact-empty" data-mentions-empty hidden><strong>No matching mentions</strong><span>Try another filter or search term.</span></div>`;
+  applyMentionFilter();
+}
+
 function renderProfile(profile) {
   const root = $("#profile");
   if (!profile) {
     root.hidden = true;
     root.innerHTML = "";
+    $("#results-overview-empty").hidden = false;
     return;
   }
   const status = ["corroborated", "partial", "unresolved"].includes(profile.status)
     ? profile.status : "unresolved";
+  const statusLabels = {
+    corroborated: "Corroborated profile",
+    partial: "Partially supported",
+    unresolved: "Identity unresolved",
+  };
   const coverage = (profile.coverage || []).map(item => {
     const state = ["confirmed", "observed", "inconclusive", "checked", "not_searched"].includes(item.state)
       ? item.state : "not_searched";
     const detail = item.checks
-      ? `${item.confirmed || 0} confirmed · ${item.observed || 0} contextual · ${item.candidates || 0} candidate · ${item.checks} checks`
+      ? `${item.confirmed || 0} corroborated · ${item.observed || 0} contextual · ${item.candidates || 0} uncertain`
       : "Not reached from this starting point";
     return `<div class="coverage-item ${state}"><strong>${esc(item.label)}</strong>`
-      + `<span>${esc(detail)}</span></div>`;
+      + `<span class="coverage-state">${esc(readableToken(state))}</span><small>${esc(detail)}</small></div>`;
   }).join("");
   const identifiers = (profile.identifiers || []).map(item => {
     const standing = ["confirmed", "provided", "candidate"].includes(item.standing)
@@ -572,58 +756,86 @@ function renderProfile(profile) {
       + `<b>${esc(profileValue(item.value))}</b><span class="fact-standing ${item.standing === "confirmed" ? "confirmed" : "candidate"}">${esc(item.standing || "observed")}</span></div>`)
   ).join("");
   const gaps = (profile.gaps || []).map(item => `<li>${esc(item)}</li>`).join("");
+  const counts = profile.counts || {};
+  const glance = [
+    [counts.confirmed_findings || 0, "corroborated findings", "confirmed"],
+    [counts.observed_findings || 0, "contextual observations", "observed"],
+    [counts.candidate_findings || 0, "uncertain candidates", "candidate"],
+    [verdictCounts.ALL, "source checks", "checks"],
+  ].map(([value, label, tone]) => `<div class="glance-metric ${tone}"><strong>${esc(value)}</strong><span>${label}</span></div>`).join("");
   const phone = profile.phone_research;
   let phoneResearch = "";
   if (phone) {
+    renderPhoneMentions(phone);
     const decision = phone.decision || {};
     const allocation = Object.entries(phone.allocation || {}).map(([key, value]) =>
       `<div class="profile-fact"><span>${esc(key.replaceAll("_", " "))}</span><b>${esc(profileValue(value))}</b><span class="fact-standing provided">allocation</span></div>`
     ).join("");
-    const mentions = (phone.mentions || []).map(item => {
-      const url = safeHttpUrl(item.url);
-      const title = url
-        ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(item.title || item.domain)}</a>`
-        : `<b>${esc(item.title || item.domain || "Public mention")}</b>`;
-      const association = String(item.association || "unresolved_mention").replaceAll("_", " ");
-      const standing = decision.status === "corroborated_identity_lead"
-        && item.identity_candidate && item.temporal_status !== "historical"
-        ? "confirmed" : "candidate";
-      return `<div class="phone-mention"><div>${title}<span class="fact-standing ${standing}">${esc(association)}</span></div>`
-        + `<span>${esc(item.domain || "")}${item.source_kind ? ` · ${esc(String(item.source_kind).replaceAll("_", " "))}` : ""}</span>`
-        + `${item.context ? `<p>${esc(item.context)}</p>` : ""}</div>`;
-    }).join("");
     const links = (phone.identity_links || []).map(item =>
       `<div class="profile-fact"><span>${esc(item.type)}</span><b>${esc(item.value)}</b><span class="fact-standing ${item.standing === "corroborated" ? "confirmed" : "candidate"}">${esc(item.standing)}</span></div>`
     ).join("");
     const lifecycle = phone.lifecycle || {};
-    const decisionStatus = String(decision.status || "unresolved").replaceAll("_", " ");
-    const nextStep = decision.recommended_action
-      ? `<div class="phone-next-step"><span>Next justified step</span><strong>${esc(decisionStatus)}</strong><p>${esc(decision.recommended_action)}</p></div>`
+    const lifecycleLabels = {
+      possible_reuse: "Possible reuse or stale records",
+      historical_mentions: "Historical mentions only",
+      corroborated_person_association: "Corroborated person association",
+      person_association_candidate: "Possible person association",
+      shared_or_service_number: "Shared or service number",
+      public_mentions: "Public mentions, identity unresolved",
+      not_observed_in_bounded_check: "No mention observed in this check",
+      unresolved: "Research incomplete",
+    };
+    const decisionLabels = {
+      manual_review: "Review conflicts before continuing",
+      corroborated_identity_lead: "A corroborated lead can be followed",
+      needs_corroboration: "Independent agreement is still needed",
+      mention_without_identity_link: "Mentions found, identity not established",
+      coverage_incomplete: "Some sources were unavailable",
+      bounded_check_complete: "The phone-only path is complete",
+    };
+    const lifecycleLabel = lifecycleLabels[lifecycle.state] || readableToken(lifecycle.state || "unresolved");
+    const decisionLabel = decisionLabels[decision.status] || readableToken(decision.status || "unresolved");
+    const phoneCounts = phone.coverage || {};
+    const conflicts = (lifecycle.conflicts || []).length
+      ? `<section class="result-alert"><strong>Conflicting evidence needs attention</strong><ul>${lifecycle.conflicts.map(item => `<li>${esc(item)}</li>`).join("")}</ul></section>`
       : "";
-    phoneResearch = `<section class="profile-section phone-dossier"><div class="phone-dossier-head"><div><span class="eyebrow">Phone research</span><h3>${esc(phone.number || "Number dossier")}</h3></div>`
-      + `<span class="phone-lifecycle state-${esc(lifecycle.state || "unresolved")}">${esc(String(lifecycle.state || "unresolved").replaceAll("_", " "))}</span></div>`
-      + `<p class="profile-note">${esc(phone.ownership_note || "")}</p>`
-      + nextStep
-      + `<div class="profile-columns"><div><h4>Numbering plan</h4><div class="profile-list">${allocation || "<span class='tag'>No allocation metadata.</span>"}</div><p class="profile-note">${esc(phone.allocation_note || "")}</p></div>`
-      + `<div><h4>Identity links</h4><div class="profile-list">${links || "<span class='tag'>No identity link corroborated.</span>"}</div></div></div>`
-      + `<div class="phone-mentions"><h4>Direct public mentions</h4>${mentions || "<span class='tag'>No direct mention was observed in the bounded check.</span>"}</div>`
-      + ((lifecycle.conflicts || []).length ? `<ul class="profile-gaps">${lifecycle.conflicts.map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : "")
+    phoneResearch = `<section class="phone-dossier"><div class="phone-dossier-head"><div><span class="eyebrow">Phone research</span><h3>${esc(phone.number || "Number dossier")}</h3></div>`
+      + `<span class="phone-lifecycle state-${esc(lifecycle.state || "unresolved")}">${esc(lifecycleLabel)}</span></div>`
+      + `<div class="phone-answer"><div><span>Current conclusion</span><h4>${esc(decisionLabel)}</h4><p>${esc(decision.recommended_action || "Review the available evidence before continuing.")}</p></div>`
+      + `<div class="phone-boundary"><strong>What this does not prove</strong><p>${esc(phone.ownership_note || "Public mentions do not establish current ownership or control.")}</p></div></div>`
+      + conflicts
+      + `<div class="phone-stat-strip"><span><strong>${esc(phoneCounts.direct_mentions || 0)}</strong> direct mentions</span>`
+      + `<span><strong>${esc(phoneCounts.independent_origins || 0)}</strong> independent origins</span>`
+      + `<span><strong>${esc((phone.identity_links || []).length)}</strong> person-level leads</span>`
+      + `<span><strong>${esc(phoneCounts.unavailable_checks || 0)}</strong> unavailable checks</span></div>`
+      + `<div class="phone-review-grid"><section><h4>Identity links</h4><div class="profile-list">${links || "<p class='section-empty'>No person-level identity link was corroborated.</p>"}</div></section>`
+      + `<section class="mentions-entry"><h4>Public mention review</h4><p>${phoneCounts.direct_mentions ? `${phoneCounts.direct_mentions} pages mention this number. They are separated into person leads, ambiguous records, and contextual pages.` : "No direct public mention was observed in the bounded check."}</p>`
+      + (phoneCounts.direct_mentions ? `<button type="button" class="secondary-action" data-open-result-view="mentions">Review ${esc(phoneCounts.direct_mentions)} public mentions</button>` : "")
+      + `</section></div>`
+      + `<details class="reading-curtain phone-technical"><summary><span><strong>Technical number details</strong><small>Numbering plan, carrier metadata, and collection limits</small></span></summary>`
+      + `<div class="reading-curtain-body"><div class="profile-list">${allocation || "<p class='section-empty'>No allocation metadata was available.</p>"}</div><p class="profile-note">${esc(phone.allocation_note || "")}</p></div></details>`
       + `</section>`;
+  } else {
+    renderPhoneMentions({ mentions: [] });
   }
+  const observedDetails = detailRows
+    ? `<details class="reading-curtain"><summary><span><strong>Observed details</strong><small>Additional fields extracted from public sources</small></span></summary><div class="reading-curtain-body profile-list">${detailRows}</div></details>`
+    : "";
+  const gapSection = `<section class="profile-gaps-section"><div><span class="eyebrow">Evidence limits</span><h3>What remains unresolved</h3></div><ul class="profile-gaps">${gaps || "<li>No material gap was recorded.</li>"}</ul></section>`;
   root.hidden = false;
-  root.innerHTML = `<div class="profile-head"><div><span class="profile-status ${status}">${esc(status)}</span>`
+  $("#results-overview-empty").hidden = true;
+  root.innerHTML = `<div class="profile-head"><div><span class="profile-status ${status}">${esc(statusLabels[status])}</span>`
     + `<h2>${esc(profile.title || "Profile synthesis")}</h2><p>${esc(profile.assessment)}</p></div>`
     + `<div class="profile-confidence"><strong>${Math.round((profile.confidence || 0) * 100)}%</strong>`
-    + `<span>evidence confidence</span></div></div>`
-    + `<div class="profile-coverage">${coverage}</div>`
-    + `<div class="profile-columns"><section class="profile-section"><h3>Identifiers</h3>`
+    + `<span>evidence support</span></div></div>`
+    + `<div class="result-at-a-glance" aria-label="Result at a glance">${glance}</div>`
+    + phoneResearch
+    + `<section class="coverage-section"><div class="section-reading-head"><span class="eyebrow">Coverage</span><h3>What was checked</h3></div><div class="profile-coverage">${coverage}</div></section>`
+    + `<div class="profile-columns identity-review"><section class="profile-section"><h3>Identifiers</h3>`
     + `<div class="profile-list">${identifiers || "<span class='tag'>No identifiers established.</span>"}</div></section>`
     + `<section class="profile-section"><h3>Public accounts</h3><div class="profile-list">`
     + `${accounts || "<span class='tag'>No account association was corroborated.</span>"}</div></section></div>`
-    + (detailRows ? `<section class="profile-section"><h3>Observed details</h3><div class="profile-list">${detailRows}</div></section>` : "")
-    + phoneResearch
-    + `<section class="profile-section"><h3>Unresolved gaps</h3><ul class="profile-gaps">`
-    + `${gaps || "<li>No material gap was recorded.</li>"}</ul></section>`
+    + observedDetails + gapSection
     + `<p class="profile-note">${esc(profile.completeness_note || "")}</p>`;
 }
 
@@ -683,7 +895,7 @@ function renderReasoning(report, target = "#reasoning-view") {
     ? `<section class="stop-decision ${stop.terminal ? "terminal" : "review"}"><div><span class="eyebrow">Why Specter stopped</span><h4>${esc(String(stop.code).replaceAll("_", " "))}</h4><p>${esc(stop.rationale || "")}</p></div><span>${Math.round((stop.confidence || 0) * 100)}% confidence</span></section>`
     : "";
   root.hidden = false;
-  root.innerHTML = `<div class="reasoning-overview"><div><span class="eyebrow">Current objective</span>`
+  const content = `<div class="reasoning-overview"><div><span class="eyebrow">Current objective</span>`
     + `<h3>${esc(report.objective)}</h3><p>${esc(report.assessment)}</p></div>`
     + `<div class="reasoning-confidence"><strong>${Math.round((report.confidence || 0) * 100)}%</strong><span>assessment confidence</span></div></div>`
     + `<div class="reasoning-metrics"><span><b>${esc(state.findings || 0)}</b> findings</span>`
@@ -697,6 +909,9 @@ function renderReasoning(report, target = "#reasoning-view") {
     + `<details class="reasoning-trace"><summary>Decision trace and guardrails</summary>`
     + `<div class="decision-waves">${decisions || "<span class='tag'>No traversal waves recorded.</span>"}</div>`
     + `<ul>${guardrails}</ul></details>`;
+  root.innerHTML = target === "#live-reasoning"
+    ? `<details class="reading-curtain reasoning-curtain"><summary><span><strong>How Specter chose its next steps</strong><small>Assessment, uncertainty, and decision trace</small></span></summary><div class="reading-curtain-body">${content}</div></details>`
+    : content;
 }
 
 // --- dashboard loaders -----------------------------------------------------

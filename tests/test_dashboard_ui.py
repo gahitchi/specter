@@ -12,6 +12,8 @@ class DashboardParser(HTMLParser):
         self.scan_views: set[str] = set()
         self.research_modes: set[str] = set()
         self.research_phases: set[str] = set()
+        self.result_views: set[str] = set()
+        self.mention_filters: set[str] = set()
         self.assets: list[str] = []
         self.curtains = 0
 
@@ -29,6 +31,10 @@ class DashboardParser(HTMLParser):
             self.research_modes.add(research_mode)
         if research_phase := values.get("data-research-phase"):
             self.research_phases.add(research_phase)
+        if result_view := values.get("data-result-view"):
+            self.result_views.add(result_view)
+        if mention_filter := values.get("data-mention-filter"):
+            self.mention_filters.add(mention_filter)
         if tag == "details" and "nav-curtain" in (values.get("class") or "").split():
             self.curtains += 1
         if tag == "link" and values.get("rel") == "stylesheet" and values.get("href"):
@@ -96,6 +102,18 @@ def test_dashboard_exposes_scan_feedback_and_filters() -> None:
         "discovery-feed",
         "discovery-observed",
         "discovery-open",
+        "results-reading-status",
+        "results-overview-empty",
+        "result-view-overview",
+        "result-view-mentions",
+        "result-view-checks",
+        "result-view-overview-tab",
+        "result-view-mentions-tab",
+        "result-view-checks-tab",
+        "phone-mentions-explorer",
+        "mention-search",
+        "evidence-search",
+        "results-filter-empty",
     } <= set(dashboard.ids)
     assert dashboard.filters == {
         "ALL",
@@ -114,6 +132,8 @@ def test_dashboard_exposes_scan_feedback_and_filters() -> None:
         "verify",
         "synthesize",
     }
+    assert dashboard.result_views == {"overview", "mentions", "checks"}
+    assert dashboard.mention_filters == {"all", "lead", "review", "context"}
     assert dashboard.curtains == 3
 
 
@@ -165,6 +185,26 @@ def test_dashboard_progressively_reveals_investigation_workspaces() -> None:
     assert 'data-scan-stage="evidence"' in markup
     assert 'setScanStage("activity")' in script
     assert 'setScanStage("evidence")' in script
+
+
+def test_results_prioritize_conclusions_and_progressively_reveal_detail() -> None:
+    markup = files("recon").joinpath("web/index.html").read_text(encoding="utf-8")
+    script = files("recon").joinpath("web/app.js").read_text(encoding="utf-8")
+    style = files("recon").joinpath("web/style.css").read_text(encoding="utf-8")
+
+    assert markup.index('id="result-view-overview"') < markup.index('id="result-view-checks"')
+    assert markup.index('id="profile"') < markup.index('id="results"')
+    assert "What Specter learned" in markup
+    assert "Complete source record" in markup
+    assert "function setResultView(" in script
+    assert "function renderPhoneMentions(" in script
+    assert "Possible person-level leads" in script
+    assert "Needs human review" in script
+    assert "Context only" in script
+    assert 'data-open-result-view="mentions"' in script
+    assert ".evidence-item-main" in style
+    assert ".mention-group-list" in style
+    assert ".phone-answer" in style
 
 
 def test_dashboard_assets_are_local_and_revisioned() -> None:

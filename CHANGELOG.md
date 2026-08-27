@@ -78,6 +78,9 @@ They were not published releases; their changes are included in 0.11.0.
   directory-lineage collapse; shared/service/reassigned-number safeguards;
   independently corroborated strict-scope identity bridges; and a dedicated
   phone dossier with the next justified step.
+- A conclusion-first result workspace with separate overview, public-mention,
+  and complete source-check views; phone mentions are grouped into person-level
+  candidates, ambiguous records, and contextual pages with search and filters.
 - Redacted cross-platform diagnostics and non-destructive local/staging
   operational drills for migrations, backup restoration, functional replay,
   readiness probes, and immutable container digests.
