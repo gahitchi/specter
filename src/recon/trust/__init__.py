@@ -5,6 +5,7 @@ calibration and analytics.
 
 from .independence import (
     class_of,
+    class_of_observation,
     corroboration,
     independence_breadth,
     independent_classes,
@@ -12,6 +13,7 @@ from .independence import (
 
 __all__ = [
     "class_of",
+    "class_of_observation",
     "independent_classes",
     "independence_breadth",
     "corroboration",

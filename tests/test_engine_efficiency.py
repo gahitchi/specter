@@ -16,7 +16,7 @@ from recon import engine as engine_mod
 from recon.config import SETTINGS
 from recon.engine import GraphScanEngine
 from recon.graph_models import Artifact, ArtifactType
-from recon.http_client import RateLimitedClient
+from recon.http_client import RateLimitedClient, RequestBudgetExceeded
 from recon.models import Query
 from recon.modules.base import Module
 
@@ -55,6 +55,92 @@ async def test_client_counts_real_requests():
         assert client.request_count == 2
 
 
+@respx.mock
+@pytest.mark.asyncio
+async def test_client_enforces_hard_budget_without_overshoot():
+    respx.route().mock(return_value=httpx.Response(200, text="ok"))
+    settings = dataclasses.replace(_FAST, max_requests=2)
+    async with RateLimitedClient(settings) as client:
+        await client.fetch("https://example.com/a")
+        await client.fetch("https://example.com/b")
+        with pytest.raises(RequestBudgetExceeded):
+            await client.fetch("https://example.com/c")
+        assert client.request_count == 2
+        assert client.budget_exhausted is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_robots_and_redirects_count_as_outbound_requests():
+    settings = dataclasses.replace(
+        _FAST, respect_robots=True, max_requests=4, max_redirects=2
+    )
+    respx.get("https://example.com/robots.txt").mock(
+        return_value=httpx.Response(200, text="User-agent: *\nAllow: /")
+    )
+    respx.get("https://example.com/start").mock(
+        return_value=httpx.Response(302, headers={"Location": "/final"})
+    )
+    respx.get("https://example.com/final").mock(
+        return_value=httpx.Response(200, text="done")
+    )
+    async with RateLimitedClient(settings) as client:
+        response = await client.fetch("https://example.com/start")
+        assert response.text == "done"
+        assert len(response.history) == 1
+        assert client.request_count == 3
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_client_caps_response_body_while_streaming():
+    respx.get("https://example.com/large").mock(
+        return_value=httpx.Response(200, text="x" * 100)
+    )
+    settings = dataclasses.replace(_FAST, max_body_bytes=16)
+    async with RateLimitedClient(settings) as client:
+        response = await client.fetch("https://example.com/large")
+        assert response.text == "x" * 16
+        assert response.headers["x-recon-body-truncated"] == "1"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "target",
+    ["https://elsewhere.example/final", "http://api.example/final"],
+)
+@pytest.mark.asyncio
+async def test_cross_origin_redirect_does_not_forward_caller_headers(target):
+    start = respx.get("https://api.example/start").mock(
+        return_value=httpx.Response(302, headers={"Location": target})
+    )
+    final = respx.get(target).mock(
+        return_value=httpx.Response(200, text="done")
+    )
+    async with RateLimitedClient(_FAST) as client:
+        response = await client.fetch(
+            "https://api.example/start", headers={"Authorization": "Bearer secret"}
+        )
+
+    assert response.text == "done"
+    assert start.calls[0].request.headers["Authorization"] == "Bearer secret"
+    assert "Authorization" not in final.calls[0].request.headers
+
+
+@pytest.mark.asyncio
+async def test_client_rejects_unsafe_urls_before_network():
+    async with RateLimitedClient(_FAST) as client:
+        with pytest.raises(ValueError):
+            await client.fetch("file:///etc/passwd")
+        with pytest.raises(ValueError):
+            await client.fetch("https://user:pass@example.com/")
+        with pytest.raises(ValueError):
+            await client.fetch("https://127.0.0.1/private")
+        with pytest.raises(ValueError):
+            await client.fetch("https://metadata.local/private")
+        assert client.request_count == 0
+
+
 # ----------------------------------------------------- budget halts expansion
 
 @respx.mock
@@ -80,8 +166,8 @@ async def test_request_budget_counts_fetches_and_halts_next_wave(monkeypatch):
     monkeypatch.setattr(engine_mod, "applicable_modules",
                         lambda art: [m for m in mods if m.accepts(art)])
 
-    # Budget of 2 real requests: the domain wave makes 3, so the resolve wave
-    # never starts. (A dispatch-counting budget would have allowed it.)
+    # Budget of 2 real requests: the third request is rejected before transport,
+    # so the resolve wave never starts and the ceiling is never exceeded.
     settings = dataclasses.replace(_FAST, max_requests=2)
     eng = GraphScanEngine(Query(domain="example.com"), settings)
     [ev async for ev in eng.stream()]
@@ -125,7 +211,9 @@ async def test_high_priority_lead_expands_before_low_when_budget_tight(monkeypat
     # fully intact. max_concurrency=1 -> one dispatch per batch; max_requests=1
     # leaves room for exactly one of the two leads. Priority must spend it on
     # the EMAIL and skip the IP.
-    settings = dataclasses.replace(_FAST, max_requests=1, max_concurrency=1)
+    settings = dataclasses.replace(
+        _FAST, max_requests=1, max_concurrency=1, scope_mode="aggressive"
+    )
     eng = GraphScanEngine(Query(domain="example.com"), settings)
     [ev async for ev in eng.stream()]
 

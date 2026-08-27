@@ -1,0 +1,25 @@
+include CHANGELOG.md
+include CODE_OF_CONDUCT.md
+include CONTRIBUTING.md
+include Dockerfile
+include EXTENDING.md
+include EVALUATION.md
+include LICENSE
+include MATURITY.md
+include PRODUCTION.md
+include README.md
+include RELEASING.md
+include SECURITY.md
+include SUPPORT.md
+include alembic.ini
+include compose.production.yaml
+include install.ps1
+include install.sh
+include uninstall.ps1
+include uninstall.sh
+include uv.lock
+recursive-include deploy *.example Caddyfile
+recursive-include scripts *.py *.sh
+recursive-include src/recon/assets *.ico *.png
+global-exclude *.py[cod]
+global-exclude *.db *.db-shm *.db-wal

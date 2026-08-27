@@ -1,14 +1,39 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "osint-recon"
-version = "0.8.0"
-description = "Local-first, professional-grade OSINT investigation framework: event-driven recursive collection, low-false-positive verification, probabilistic correlation, and long-term monitoring."
+version = "0.11.0"
+description = "Specter local-first OSINT research with recursive collection, evidence-aware verification, correlation, and monitoring."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "gahitchi" }]
+keywords = [
+    "osint",
+    "reconnaissance",
+    "investigation",
+    "threat-intelligence",
+    "digital-forensics",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: X11 Applications :: Qt",
+    "Framework :: FastAPI",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
+]
 dependencies = [
     "httpx[http2]>=0.27",
     "fastapi>=0.110",
@@ -20,26 +45,58 @@ dependencies = [
     "sqlalchemy>=2.0",
     "apscheduler>=3.10",
     "jellyfish>=1.0",
+    "alembic>=1.13",
+    "argon2-cffi>=23.1",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
+desktop = ["PySide6>=6.8,<7"]
 pdf = ["weasyprint>=60"]
 postgres = ["psycopg[binary]>=3.1"]
 distributed = ["arq>=0.25", "redis>=5.0"]
+secure = ["cryptography>=44", "keyring>=25"]
+ml = ["scikit-learn>=1.5"]
+maigret = ["maigret>=0.6.4,<0.7"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "respx>=0.21",
     "pytest-cov>=5.0",
     "ruff>=0.6",
+    "bandit>=1.8",
+    "pip-audit>=2.9",
+    "twine>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/gahitchi/specter"
+Documentation = "https://github.com/gahitchi/specter/blob/main/README.md"
+Repository = "https://github.com/gahitchi/specter.git"
+Issues = "https://github.com/gahitchi/specter/issues"
+Changelog = "https://github.com/gahitchi/specter/blob/main/CHANGELOG.md"
 
 [project.scripts]
 recon = "recon.cli:main"
 specter = "recon.launch:main"
 
+[project.gui-scripts]
+specter-app = "recon.launch:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+recon = [
+    "assets/*.ico",
+    "assets/*.png",
+    "data/*.json",
+    "web/*.html",
+    "web/*.css",
+    "web/*.js",
+    "migrations/*.mako",
+    "migrations/versions/*.py",
+]
 
 [tool.ruff]
 line-length = 100
@@ -56,9 +113,18 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=recon --cov-report=term-missing"
+addopts = "--cov=recon --cov-report=term-missing --cov-fail-under=68"
 filterwarnings = [
     "error::ResourceWarning",
     # Starlette's TestClient still imports httpx; upstream-only, not our code.
-    "ignore:Using `httpx` with `starlette.testclient` is deprecated:DeprecationWarning",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
 ]
+
+[tool.coverage.run]
+# Native Qt behavior has a separate cross-platform smoke gate in CI. Keeping it
+# out of line coverage prevents optional GUI glue from diluting domain coverage.
+omit = ["src/recon/desktop.py"]
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B404", "B603"]

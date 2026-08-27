@@ -1,0 +1,60 @@
+{
+  "name": "Specter functional replay fixture",
+  "version": 1,
+  "provenance": "functional_fixture",
+  "description": "Synthetic cases that exercise the evaluator. They must not be used as evidence of real-world accuracy.",
+  "cases": [
+    {
+      "id": "phone-public-mention",
+      "category": "phone",
+      "query": {"phone": "+14155552671"},
+      "observed_findings": [
+        {"source": "phone:web", "category": "phone", "label": "Public phone mentions", "verdict": "FOUND", "confidence": 0.78, "signals": {"phone_e164": "+14155552671"}}
+      ],
+      "expected_claims": [
+        {"source": "phone:web", "label": "Public phone mentions", "verdict": "FOUND"}
+      ],
+      "expected_profile_status": "partial",
+      "required_actions": ["corroborate-findings"]
+    },
+    {
+      "id": "phone-no-bounded-mention",
+      "category": "phone",
+      "query": {"phone": "+442071838750"},
+      "observed_findings": [
+        {"source": "phone:web", "category": "phone", "label": "Public phone mentions", "verdict": "NOT_FOUND", "confidence": 0.0}
+      ],
+      "expected_claims": [
+        {"source": "phone:web", "label": "Public phone mentions", "verdict": "NOT_FOUND"}
+      ],
+      "expected_profile_status": "unresolved",
+      "required_actions": ["refine-identifiers"]
+    },
+    {
+      "id": "username-confirmed",
+      "category": "username",
+      "query": {"username": "example-user"},
+      "observed_findings": [
+        {"source": "username:Example", "category": "username", "label": "Example", "verdict": "FOUND", "confidence": 0.9, "signals": {"username": "example-user"}}
+      ],
+      "expected_claims": [
+        {"source": "username:Example", "label": "Example", "verdict": "FOUND"}
+      ],
+      "expected_profile_status": "partial",
+      "required_actions": ["corroborate-findings"]
+    },
+    {
+      "id": "domain-negative",
+      "category": "domain",
+      "query": {"domain": "invalid.example"},
+      "observed_findings": [
+        {"source": "domain:rdap", "category": "domain", "label": "RDAP", "verdict": "NOT_FOUND", "confidence": 0.0}
+      ],
+      "expected_claims": [
+        {"source": "domain:rdap", "label": "RDAP", "verdict": "NOT_FOUND"}
+      ],
+      "expected_profile_status": "unresolved",
+      "required_actions": ["refine-identifiers"]
+    }
+  ]
+}

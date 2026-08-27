@@ -8,6 +8,7 @@ and emits the artifacts that make recursion possible."""
 from __future__ import annotations
 
 from ..collectors import username as _username
+from ..evidence import confirmation_eligible
 from ..graph_models import Artifact, ArtifactType
 from ..models import Finding, Query, Verdict
 from .base import Module, ModuleContext
@@ -18,7 +19,7 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
 
     async def emit(f: Finding) -> None:
         await ctx.emit_finding(f)
-        if f.verdict == Verdict.FOUND and f.url:
+        if f.verdict == Verdict.FOUND and f.url and confirmation_eligible(f):
             await ctx.emit_artifact(Artifact.make(
                 ArtifactType.ACCOUNT_PROFILE, f.url, parent=art,
                 source_module="username", site=f.label,

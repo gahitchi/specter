@@ -7,6 +7,14 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel, Field
 
+from .evidence import (
+    Completeness,
+    ConfidenceDimensions,
+    EvidenceOrigin,
+    EvidencePolicy,
+    ExtractionProvenance,
+    TemporalEvidence,
+)
 from .explain import ScoreBreakdown
 
 if TYPE_CHECKING:
@@ -33,22 +41,59 @@ class Query(BaseModel):
     phone: Optional[str] = None
     domain: Optional[str] = None
     name: Optional[str] = None
+    url: Optional[str] = None
+    ip_address: Optional[str] = None
+
+    @classmethod
+    def from_input(
+        cls,
+        value: str,
+        hint: str | None = None,
+        *,
+        default_phone_region: str | None = None,
+    ) -> "Query":
+        """Classify one starting value and create the strongest safe seed set."""
+        from .identifiers import classify_input
+
+        return cls(**classify_input(
+            value,
+            hint=hint,
+            default_phone_region=default_phone_region,
+        ).query_fields)
 
     def normalized(self) -> "Query":
         # Single normalization layer so collectors + correlation agree on values.
-        from .normalize import norm_domain, norm_email, norm_text, norm_username
+        from .normalize import (
+            norm_domain,
+            norm_email,
+            norm_ip,
+            norm_phone,
+            norm_text,
+            norm_url,
+            norm_username,
+        )
 
         return Query(
             username=norm_username(self.username),
             email=norm_email(self.email),
-            phone=norm_text(self.phone),
+            phone=norm_phone(self.phone),
             domain=norm_domain(self.domain),
             name=norm_text(self.name),
+            url=norm_url(self.url),
+            ip_address=norm_ip(self.ip_address),
         )
 
     def is_empty(self) -> bool:
         return not any(
-            (self.username, self.email, self.phone, self.domain, self.name)
+            (
+                self.username,
+                self.email,
+                self.phone,
+                self.domain,
+                self.name,
+                self.url,
+                self.ip_address,
+            )
         )
 
     def to_seed_artifacts(self) -> list[Artifact]:
@@ -61,6 +106,8 @@ class Query(BaseModel):
             "phone": ArtifactType.PHONE,
             "domain": ArtifactType.DOMAIN,
             "name": ArtifactType.NAME,
+            "url": ArtifactType.ACCOUNT_PROFILE,
+            "ip_address": ArtifactType.IP_ADDRESS,
         }
         seeds: list["Artifact"] = []
         for field, atype in field_map.items():
@@ -95,6 +142,7 @@ class Evidence(BaseModel):
     status: int
     final_url: str
     body_len: int
+    content_sha256: Optional[str] = None
     fingerprint: str  # simhash hex of normalized body
     title: Optional[str] = None
     contains_query: bool = False
@@ -109,7 +157,7 @@ class Finding(BaseModel):
     """A single result, post-verification, ready for streaming/clustering/export."""
 
     source: str  # e.g. "username:GitHub", "email:gravatar"
-    category: str  # username | email | phone | domain | name
+    category: str  # Evidence family, e.g. username, email, domain, or network.
     label: str  # human label, e.g. site name
     url: Optional[str] = None
     verdict: Verdict
@@ -124,14 +172,28 @@ class Finding(BaseModel):
     # Strong identity signals for clustering (e.g. {"gravatar_hash": "..."}).
     signals: dict[str, str] = Field(default_factory=dict)
     data: dict[str, Any] = Field(default_factory=dict)
+    origin: Optional[EvidenceOrigin] = None
+    extractions: list[ExtractionProvenance] = Field(default_factory=list)
+    temporal: TemporalEvidence = Field(default_factory=TemporalEvidence)
+    completeness: Completeness = Completeness.UNKNOWN
+    confidence_dimensions: Optional[ConfidenceDimensions] = None
+    policy: EvidencePolicy = Field(default_factory=EvidencePolicy)
 
     @property
     def is_hit(self) -> bool:
-        """Confirmed presence — drives correlation, counting, and change diffs.
-        UNVERIFIABLE is deliberately excluded: it is not evidence of existence."""
+        """The source positively observed its narrow claim.
+
+        Identity confirmation is stricter and is decided by the evidence policy
+        plus corroboration; callers must not use this property as ownership proof.
+        """
+        return self.verdict == Verdict.FOUND
+
+    @property
+    def is_candidate(self) -> bool:
+        """Presence is observed or plausible; useful for display, never identity proof."""
         return self.verdict in (Verdict.FOUND, Verdict.UNCERTAIN)
 
     @property
     def is_notable(self) -> bool:
-        """Worth showing to the user (a hit, or an honest 'couldn't tell')."""
+        """Worth showing to the user (observed, candidate, or couldn't tell)."""
         return self.verdict in (Verdict.FOUND, Verdict.UNCERTAIN, Verdict.UNVERIFIABLE)

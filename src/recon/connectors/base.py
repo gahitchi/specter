@@ -6,7 +6,8 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
-from ..http_client import RateLimitedClient
+from ..http_client import RateLimitedClient, RequestBudgetExceeded
+from ..keys import redact
 from ..models import Finding, Query, Verdict
 from . import cache
 
@@ -18,7 +19,7 @@ EmitFn = Callable[[Finding], Awaitable[None]]
 @dataclass
 class Connector:
     name: str
-    kind: str  # username | email | phone | domain | name  (matches a Query field)
+    kind: str  # Matches a typed Query field consumed by this connector.
     collect: CollectFn
     reliability_prior: float = 0.5
     requires_keys: list[str] = field(default_factory=list)
@@ -63,12 +64,15 @@ class Connector:
 
         try:
             await self.collect(query, client, capture)
+        except RequestBudgetExceeded:
+            raise
         except Exception as e:  # noqa: BLE001 - isolate source failures
+            error = redact(str(e))
             await asyncio.to_thread(cache.record_failure, self.name, self.kind,
-                                    self.reliability_prior, str(e))
+                                    self.reliability_prior, error)
             await emit(Finding(
                 source=self.name, category=self.kind, label=self.name,
-                verdict=Verdict.ERROR, reasons=[f"connector failed: {e}"],
+                verdict=Verdict.ERROR, reasons=[f"connector failed: {error}"],
             ))
             return
 

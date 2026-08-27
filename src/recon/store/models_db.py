@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -33,6 +34,7 @@ class Target(Base):
     __tablename__ = "targets"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), index=True)
     label: Mapped[Optional[str]] = mapped_column(String(200))
     query: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     watchlist: Mapped[bool] = mapped_column(default=False)
@@ -81,10 +83,81 @@ class Observation(Base):
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     fingerprint: Mapped[Optional[str]] = mapped_column(String(32), index=True)
     reliability: Mapped[float] = mapped_column(Float, default=0.5)
+    collector: Mapped[Optional[str]] = mapped_column(String(120), index=True)
+    origin: Mapped[Optional[str]] = mapped_column(String(240), index=True)
+    evidence_class: Mapped[Optional[str]] = mapped_column(String(40), index=True)
+    independence_key: Mapped[Optional[str]] = mapped_column(String(200), index=True)
+    claim_key: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    extractions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    confidence_dimensions: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, default=None)
+    policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    completeness: Mapped[Optional[str]] = mapped_column(String(20), index=True)
+    temporal_status: Mapped[Optional[str]] = mapped_column(String(20), index=True)
+    observed_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    valid_from: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    first_seen_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     run: Mapped[Run] = relationship(back_populates="observations")
     entity: Mapped[Optional["Entity"]] = relationship(back_populates="observations")
+    reviews: Mapped[list["ObservationReview"]] = relationship(
+        back_populates="observation", order_by="ObservationReview.id"
+    )
+
+
+class ObservationContradiction(Base):
+    """An explicit conflict between two temporal observations of one claim."""
+
+    __tablename__ = "observation_contradictions"
+    __table_args__ = (
+        UniqueConstraint(
+            "earlier_observation_id",
+            "later_observation_id",
+            "kind",
+            name="uq_observation_contradiction",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("runs.id"), index=True)
+    target_id: Mapped[int] = mapped_column(ForeignKey("targets.id"), index=True)
+    claim_key: Mapped[str] = mapped_column(String(64), index=True)
+    earlier_observation_id: Mapped[int] = mapped_column(
+        ForeignKey("observations.id"), index=True
+    )
+    later_observation_id: Mapped[int] = mapped_column(
+        ForeignKey("observations.id"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(60), index=True)
+    severity: Mapped[str] = mapped_column(String(20), default="medium", index=True)
+    reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ObservationReview(Base):
+    """Immutable investigator decision attached to an observation.
+
+    New rows supersede older rows. Keeping the history makes manual decisions
+    auditable without mutating the automated verdict that produced the finding.
+    """
+
+    __tablename__ = "observation_reviews"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    observation_id: Mapped[int] = mapped_column(
+        ForeignKey("observations.id"), index=True
+    )
+    run_id: Mapped[int] = mapped_column(ForeignKey("runs.id"), index=True)
+    target_id: Mapped[int] = mapped_column(ForeignKey("targets.id"), index=True)
+    decision: Mapped[str] = mapped_column(String(20), index=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    reviewer: Mapped[str] = mapped_column(String(120), default="local")
+    reviewer_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    observation: Mapped[Observation] = relationship(back_populates="reviews")
 
 
 class Entity(Base):
@@ -135,6 +208,103 @@ class Source(Base):
     last_error: Mapped[Optional[str]] = mapped_column(Text)
 
 
+class SourceHealthCheck(Base):
+    """Result of an explicit, designated source canary."""
+
+    __tablename__ = "source_health_checks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    module: Mapped[str] = mapped_column(String(120), index=True)
+    canary: Mapped[str] = mapped_column(String(120), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class EvaluationRun(Base):
+    """Immutable result from one replayable quality evaluation."""
+
+    __tablename__ = "evaluation_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_name: Mapped[str] = mapped_column(String(160), index=True)
+    dataset_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    provenance: Mapped[str] = mapped_column(String(40), index=True)
+    cases: Mapped[int] = mapped_column(Integer, default=0)
+    claims: Mapped[int] = mapped_column(Integer, default=0)
+    precision: Mapped[float] = mapped_column(Float, default=0.0)
+    recall: Mapped[float] = mapped_column(Float, default=0.0)
+    gate_status: Mapped[str] = mapped_column(String(30), index=True)
+    report: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AuditEvent(Base):
+    """Security-conscious local audit trail for human and governance actions."""
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    action: Mapped[str] = mapped_column(String(80), index=True)
+    actor: Mapped[str] = mapped_column(String(120), default="local")
+    actor_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), index=True)
+    object_type: Mapped[str] = mapped_column(String(40), index=True)
+    object_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class User(Base):
+    """Account used when authenticated or remote mode is enabled."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(120), default="")
+    password_hash: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String(20), default="analyst", index=True)
+    active: Mapped[bool] = mapped_column(default=True, index=True)
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    last_login_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class UserSession(Base):
+    """Server-side session; only a hash of the opaque browser token is stored."""
+
+    __tablename__ = "user_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    csrf_token: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    user: Mapped[User] = relationship()
+
+
+class EntityPairReview(Base):
+    """Independent label for a candidate observation pair used by ML training."""
+
+    __tablename__ = "entity_pair_reviews"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    left_observation_id: Mapped[int] = mapped_column(ForeignKey("observations.id"), index=True)
+    right_observation_id: Mapped[int] = mapped_column(ForeignKey("observations.id"), index=True)
+    same_identity: Mapped[bool] = mapped_column(index=True)
+    reviewer_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), index=True)
+    reviewer: Mapped[str] = mapped_column(String(120))
+    verification_method: Mapped[str] = mapped_column(String(200))
+    note: Mapped[str] = mapped_column(Text, default="")
+    features: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class CacheEntry(Base):
     """Store-backed response cache so re-runs don't depend on live sources."""
 
@@ -152,14 +322,37 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), index=True)
+    target_id: Mapped[Optional[int]] = mapped_column(ForeignKey("targets.id"), index=True)
     run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("runs.id"), index=True)
     kind: Mapped[str] = mapped_column(String(40), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)  # queued|leased|done|error
+    # queued | leased | cancel_requested | cancelled | done | error
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     leased_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     error: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class JobActivity(Base):
+    """Latest graph state for one durable job activity node."""
+
+    __tablename__ = "job_activity_nodes"
+    __table_args__ = (
+        UniqueConstraint("job_id", "node_key", name="uq_job_activity_node"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), index=True
+    )
+    node_key: Mapped[str] = mapped_column(String(64))
+    sequence: Mapped[int] = mapped_column(Integer, index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_now
+    )
 
 
 class Schedule(Base):
@@ -225,7 +418,7 @@ class ArtifactEdge(Base):
 
 
 class CalibrationRun(Base):
-    """One execution of `recon calibrate`: the calibration metrics of the verify
+    """One execution of `specter calibrate`: the calibration metrics of the verify
     engine against ground-truth labels at a point in time (Phase 5c)."""
 
     __tablename__ = "calibration_runs"

@@ -5,6 +5,7 @@ DOMAIN so the domain/DNS modules can take over."""
 from __future__ import annotations
 
 from ..collectors import email as _email
+from ..evidence import EvidencePolicy
 from ..graph_models import Artifact, ArtifactType
 from ..models import Finding, Query
 from .base import Module, ModuleContext
@@ -26,6 +27,8 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
         if cand:
             await ctx.emit_artifact(Artifact.make(
                 ArtifactType.USERNAME, cand, parent=art, source_module="email",
+                confidence=0.4,
+                policy=EvidencePolicy.candidate(),
             ))
 
     await _email.collect(q, ctx.client, emit)

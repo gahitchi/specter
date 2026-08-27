@@ -4,13 +4,15 @@ independence classes, and calibration history — into a few honest summaries.
 
 The aggregation functions are pure (they take iterables of rows), so they unit-
 test without a database; `compute(db)` wires them to the persisted tables and
-backs `GET /api/analytics`, `recon analytics`, and the dashboard's Confidence tab.
+backs `GET /api/analytics`, `specter analytics`, and the dashboard's Confidence tab.
 """
 
 from __future__ import annotations
 
 from collections import Counter, defaultdict
 
+from .evidence import confirmation_satisfied
+from .models import Query
 from .trust import independent_classes
 
 # Verdicts whose confidence is a meaningful presence estimate (ERROR /
@@ -53,15 +55,23 @@ def top_breakdown_terms(rows, limit: int = 8) -> list[dict]:
     return items[:limit]
 
 
-def independence_coverage(rows) -> dict:
-    """Across FOUND findings, distinct source *names* vs independent *classes* —
-    the corroboration-inflation factor the 5a shadow score corrects for."""
-    found = [r for r in rows if r.verdict == "FOUND"]
+def independence_coverage(rows, queries: dict[int, Query] | None = None) -> dict:
+    """Compare connector names with independent classes for confirmed evidence."""
+    grouped: dict[int | None, list] = defaultdict(list)
+    for row in rows:
+        grouped[getattr(row, "target_id", None)].append(row)
+    found = [
+        row
+        for target_id, target_rows in grouped.items()
+        for row in target_rows
+        if confirmation_satisfied(row, target_rows, (queries or {}).get(target_id))
+    ]
     sources = {r.source for r in found}
-    classes, redundant = independent_classes(sources)
+    classes, redundant = independent_classes(found)
     n_names, n_classes = len(sources), len(classes)
     return {
-        "found": len(found),
+        "confirmed": len(found),
+        "found": len(found),  # compatibility with existing API consumers
         "distinct_sources": n_names,
         "distinct_classes": n_classes,
         "inflation": round(n_names / n_classes, 2) if n_classes else 0.0,
@@ -89,22 +99,77 @@ def calibration_drift(cal_runs) -> list[dict]:
     } for c in cal_runs]
 
 
+def quality_metrics(rows, runs, artifacts, contradictions) -> dict:
+    """Operational evidence-quality indicators with explicit denominators."""
+    total = len(rows)
+    quality = [getattr(run, "stats", {}).get("quality", {}) for run in runs]
+    attempted = sum(int(item.get("attempted", 0)) for item in quality)
+    duplicates = sum(int(item.get("duplicates_collapsed", 0)) for item in quality)
+    blocked = sum(int(item.get("blocked", 0)) for item in quality)
+    parser_failures = sum(
+        row.verdict == "ERROR"
+        and row.source in {"phone:web", "profile:enrich"}
+        for row in rows
+    )
+    timeouts = sum(
+        row.verdict == "ERROR"
+        and "timeout" in " ".join(row.reasons or []).casefold()
+        for row in rows
+    )
+    return {
+        "origin_coverage": round(
+            sum(bool(getattr(row, "origin", None)) for row in rows) / total, 3
+        ) if total else 0.0,
+        "extraction_coverage": round(
+            sum(bool(getattr(row, "extractions", None)) for row in rows) / total, 3
+        ) if total else 0.0,
+        "temporal_coverage": round(
+            sum(bool(getattr(row, "observed_at", None)) for row in rows) / total, 3
+        ) if total else 0.0,
+        "partial_observations": sum(
+            getattr(row, "completeness", None) == "partial" for row in rows
+        ),
+        "historical_observations": sum(
+            getattr(row, "temporal_status", None) == "historical" for row in rows
+        ),
+        "contradictions": len(contradictions),
+        "contradiction_rate": round(len(contradictions) / total, 3) if total else 0.0,
+        "artifact_attempts": attempted,
+        "duplicate_collapse_rate": round(duplicates / attempted, 3) if attempted else 0.0,
+        "automatic_pivots_blocked": blocked,
+        "parser_failure_rate": round(parser_failures / total, 3) if total else 0.0,
+        "module_timeout_rate": round(timeouts / total, 3) if total else 0.0,
+        "artifacts_recorded": len(artifacts),
+    }
+
+
 def compute(db) -> dict:
     from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
 
     from .store import models_db as m
 
     with db.session() as s:
-        obs = list(s.execute(select(m.Observation)).scalars().all())
+        obs = list(s.execute(
+            select(m.Observation).options(selectinload(m.Observation.reviews))
+        ).scalars().all())
+        targets = list(s.execute(select(m.Target)).scalars().all())
+        queries = {target.id: Query.model_validate(target.query) for target in targets}
         sources = list(s.execute(select(m.Source)).scalars().all())
         cals = list(s.execute(
             select(m.CalibrationRun).order_by(m.CalibrationRun.id)).scalars().all())
+        runs = list(s.execute(select(m.Run)).scalars().all())
+        artifacts = list(s.execute(select(m.ArtifactNode)).scalars().all())
+        contradictions = list(s.execute(
+            select(m.ObservationContradiction)
+        ).scalars().all())
     return {
         "n_observations": len(obs),
         "confidence_histogram": confidence_histogram(obs),
         "verdict_mix": verdict_mix(obs),
         "top_terms": top_breakdown_terms(obs),
-        "independence_coverage": independence_coverage(obs),
+        "independence_coverage": independence_coverage(obs, queries),
         "source_health": source_health(sources),
         "calibration_drift": calibration_drift(cals),
+        "quality": quality_metrics(obs, runs, artifacts, contradictions),
     }

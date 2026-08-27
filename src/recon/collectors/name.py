@@ -8,7 +8,9 @@ from __future__ import annotations
 from typing import Awaitable, Callable
 from urllib.parse import quote
 
-from ..http_client import RateLimitedClient
+from ..evidence import EvidencePolicy
+from ..http_client import RateLimitedClient, RequestBudgetExceeded
+from ..keys import redact
 from ..models import Finding, Query, Verdict
 
 EmitFn = Callable[[Finding], Awaitable[None]]
@@ -33,9 +35,7 @@ async def collect(query: Query, client: RateLimitedClient, emit: EmitFn) -> None
     # --- ORCID expanded search ---
     try:
         url = f"https://pub.orcid.org/v3.0/expanded-search/?q={quote(name)}&rows=5"
-        resp = await client._client.get(  # type: ignore[union-attr]
-            url, headers={"Accept": "application/json"}
-        )
+        resp = await client.fetch(url, headers={"Accept": "application/json"})
         if resp.status_code == 200:
             results = resp.json().get("expanded-result") or []
             for r in results[:5]:
@@ -52,11 +52,14 @@ async def collect(query: Query, client: RateLimitedClient, emit: EmitFn) -> None
                     reasons=[f"ORCID name match overlap {overlap:.2f}"],
                     signals={"orcid": orcid} if orcid and verdict == Verdict.FOUND else {},
                     data={"institutions": r.get("institution-name", [])},
+                    policy=EvidencePolicy.candidate(),
                 ))
+    except RequestBudgetExceeded:
+        raise
     except Exception as e:  # noqa: BLE001
         await emit(Finding(
             source="name:orcid", category="name", label="ORCID",
-            verdict=Verdict.ERROR, reasons=[f"ORCID search failed: {e}"],
+            verdict=Verdict.ERROR, reasons=[f"ORCID search failed: {redact(str(e))}"],
         ))
 
     # --- OpenAlex authors ---
@@ -83,9 +86,12 @@ async def collect(query: Query, client: RateLimitedClient, emit: EmitFn) -> None
                     },
                     signals={"orcid": (a.get("orcid") or "").rsplit("/", 1)[-1]}
                     if a.get("orcid") and verdict == Verdict.FOUND else {},
+                    policy=EvidencePolicy.candidate(),
                 ))
+    except RequestBudgetExceeded:
+        raise
     except Exception as e:  # noqa: BLE001
         await emit(Finding(
             source="name:openalex", category="name", label="OpenAlex",
-            verdict=Verdict.ERROR, reasons=[f"OpenAlex search failed: {e}"],
+            verdict=Verdict.ERROR, reasons=[f"OpenAlex search failed: {redact(str(e))}"],
         ))

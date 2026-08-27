@@ -15,7 +15,9 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
     key = VAULT.get("shodan")
     if not key:  # defensive: engine already gates this
         return
-    resp = await ctx.client.fetch(f"https://api.shodan.io/shodan/host/{art.normalized}?key={key}")
+    resp = await ctx.client.fetch(
+        f"https://api.shodan.io/shodan/host/{art.normalized}", params={"key": key}
+    )
     if resp.status_code == 404:
         await ctx.emit_finding(Finding(
             source="shodan:host", category="network", label=f"Shodan {art.normalized}",

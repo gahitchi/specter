@@ -10,35 +10,47 @@ from __future__ import annotations
 
 import secrets
 import string
+import hashlib
 from typing import Optional
 
-from ..config import SETTINGS
+from ..config import SETTINGS, Settings
 from ..http_client import RateLimitedClient
 from ..models import Evidence, SiteRule
 from . import defenses, similarity
 
 
-def random_absent_account(length: int | None = None, key: str | None = None) -> str:
+def random_absent_account(
+    length: int | None = None,
+    key: str | None = None,
+    settings: Settings | None = None,
+) -> str:
     """A username extremely unlikely to belong to anyone (for baseline probing).
 
     Deterministic mode derives it from probe_seed + `key` so baselines — and
     therefore verdicts — are reproducible across runs (#8). Otherwise it is
     cryptographically random.
     """
-    n = length or SETTINGS.control_probe_len
+    settings = settings or SETTINGS
+    n = length or settings.control_probe_len
     alphabet = string.ascii_lowercase + string.digits
-    if SETTINGS.deterministic:
+    if settings.deterministic:
         import hashlib
 
-        seed = f"{SETTINGS.probe_seed}:{key or ''}".encode()
-        digest = hashlib.blake2b(seed, digest_size=n).hexdigest()[:n]
+        seed = f"{settings.probe_seed}:{key or ''}".encode()
+        digest = hashlib.shake_256(seed).hexdigest(n)[:n]
         return "zz" + digest
     return "zz" + "".join(secrets.choice(alphabet) for _ in range(n))
 
 
-async def evidence_from_response(url: str, resp, elapsed_ms: int = 0,
-                                 query_term: Optional[str] = None) -> Evidence:
-    body = resp.text[: SETTINGS.max_body_bytes]
+async def evidence_from_response(
+    url: str,
+    resp,
+    elapsed_ms: int = 0,
+    query_term: Optional[str] = None,
+    settings: Settings | None = None,
+) -> Evidence:
+    settings = settings or SETTINGS
+    body = resp.text[: settings.max_body_bytes]
     title = similarity.extract_title(body)
     contains = bool(query_term) and query_term.lower() in body.lower()
     blocked = defenses.detect(resp.status_code, resp.headers, body)
@@ -47,6 +59,9 @@ async def evidence_from_response(url: str, resp, elapsed_ms: int = 0,
         status=resp.status_code,
         final_url=str(resp.url),
         body_len=len(body),
+        content_sha256=hashlib.sha256(
+            resp.content[: settings.max_body_bytes]
+        ).hexdigest(),
         fingerprint=similarity.fingerprint_hex(body),
         title=title,
         contains_query=contains,
@@ -66,11 +81,13 @@ class BaselineCache:
         key = rule.name
         if key in self._cache:
             return self._cache[key]
-        probe = random_absent_account(key=rule.name)
+        probe = random_absent_account(key=rule.name, settings=self._client.s)
         url = rule.url_for(probe)
         try:
             resp = await self._client.fetch(url)
-            ev = await evidence_from_response(url, resp, query_term=probe)
+            ev = await evidence_from_response(
+                url, resp, query_term=probe, settings=self._client.s
+            )
         except Exception as e:  # noqa: BLE001 - baseline is best-effort
             ev = Evidence(
                 url=url, status=0, final_url=url, body_len=0,

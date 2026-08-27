@@ -15,8 +15,29 @@ env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.uv-cache/
+.pip-audit-cache/
+.cache/
 .coverage
 htmlcov/
+audit-requirements.txt
+.codex-tmp-*/
+.test-tmp/
+.test-tmp-*/
+
+# Local runtime state
+*.log
+*.pid
+
+# Local configuration and private key material
+.env
+.env.*
+!.env.example
+!/deploy/.env.production.example
+*.key
+*.pem
+*.p12
+*.pfx
 
 # Generated reports (may contain sensitive subject data — keep out of git)
 /reports/*
@@ -29,7 +50,7 @@ htmlcov/
 /data/*.db
 
 # Fetched WhatsMyName dataset (opt-in via scripts/fetch_wmn.py; CC BY 4.0, large)
-/data/wmn-data.json
+/data/
 
 # Local API-key vault (never commit secrets)
 keys.toml
@@ -39,3 +60,9 @@ keys.toml
 .vscode/
 .DS_Store
 *.swp
+
+# Production secret material
+/deploy/secrets/*
+!/deploy/secrets/*.example
+/backups/*
+!/backups/.gitkeep

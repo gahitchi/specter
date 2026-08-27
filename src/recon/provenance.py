@@ -16,14 +16,21 @@ from pathlib import Path
 
 from . import __version__
 from .config import SETTINGS
+from .evidence import EVIDENCE_MODEL_VERSION
 
 _TRACKED = ("httpx", "sqlalchemy", "jellyfish", "phonenumbers", "dnspython", "fastapi")
 
 
-@lru_cache(maxsize=1)
-def sites_dataset_hash() -> str:
-    root = Path(__file__).resolve().parents[2]
-    p = root / SETTINGS.sites_data_file
+def sha256_file(path: str | Path) -> str:
+    """Hash an input file for provenance without embedding its path or content."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+@lru_cache(maxsize=16)
+def sites_dataset_hash(path: str | None = None) -> str:
+    p = Path(path or SETTINGS.sites_data_file).expanduser()
+    if not p.is_absolute():
+        p = Path.cwd() / p
     try:
         return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
     except OSError:
@@ -56,7 +63,7 @@ def provenance(settings=SETTINGS) -> dict:
         "platform": f"{platform.system()} {platform.release()}",
         "deterministic": settings.deterministic,
         "probe_seed": settings.probe_seed if settings.deterministic else None,
-        "sites_dataset_sha256": sites_dataset_hash(),
+        "sites_dataset_sha256": sites_dataset_hash(settings.sites_data_file),
         "thresholds": _thresholds(settings),
         "engine": {
             "scope_mode": settings.scope_mode,
@@ -65,6 +72,18 @@ def provenance(settings=SETTINGS) -> dict:
             "max_requests": settings.max_requests,
             "passive_only": settings.passive_only,
             "confidence_independence": settings.confidence_independence,
+        },
+        "reasoning": {
+            "version": 1,
+            "adaptive_dispatch": True,
+            "evidence_bound": True,
+        },
+        "evidence_model": {
+            "version": EVIDENCE_MODEL_VERSION,
+            "origin_identity": True,
+            "temporal_state": True,
+            "policy_gated_pivots": True,
+            "explicit_contradictions": True,
         },
         "dependencies": {pkg: _ver(pkg) for pkg in _TRACKED},
         "argv": " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "",
@@ -82,7 +101,7 @@ def finding_trace(*, module: str, source: str, rule=None, ev=None,
         "module": module,
         "source": source,
         "deterministic": settings.deterministic,
-        "dataset_sha256": sites_dataset_hash(),
+        "dataset_sha256": sites_dataset_hash(settings.sites_data_file),
         "thresholds": _thresholds(settings),
     }
     if rule is not None:
@@ -90,9 +109,11 @@ def finding_trace(*, module: str, source: str, rule=None, ev=None,
                            "error_type": getattr(rule, "error_type", None)}
     if ev is not None:
         tr["request"] = {"status": ev.status, "final_url": ev.final_url,
-                         "elapsed_ms": ev.elapsed_ms, "blocked": ev.blocked}
+                         "elapsed_ms": ev.elapsed_ms, "blocked": ev.blocked,
+                         "content_sha256": ev.content_sha256,
+                         "content_bytes": ev.body_len}
     tr["baseline"] = None if baseline is None else {
         "status": baseline.status, "fingerprint": baseline.fingerprint,
-        "blocked": baseline.blocked,
+        "blocked": baseline.blocked, "content_sha256": baseline.content_sha256,
     }
     return tr

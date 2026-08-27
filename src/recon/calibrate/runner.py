@@ -27,7 +27,7 @@ async def _live_samples(rows: list[dict], settings: Settings) -> list[Sample]:
     from ..http_client import RateLimitedClient
     from ..verify.baseline import BaselineCache
 
-    rules = {r.name: r for r in load_sites()}
+    rules = {r.name: r for r in load_sites(settings=settings)}
     samples: list[Sample] = []
     async with RateLimitedClient(settings) as client:
         baselines = BaselineCache(client)
@@ -74,9 +74,7 @@ async def run_calibration(evaluator: Evaluator | None = None, settings: Settings
 
 
 def independence_impact(db) -> dict:
-    """Advisory for the source-independence flip: over persisted entities, how
-    many would change confidence under the independence (shadow) weighting, and by
-    how much. Lets a human decide whether to set `confidence_independence`."""
+    """Compare official independence-aware confidence with the legacy shadow."""
     from sqlalchemy import select
 
     from ..store import models_db as m

@@ -12,8 +12,12 @@ import time
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from ..config import SETTINGS
-from ..http_client import RateLimitedClient
+from pydantic import ValidationError
+
+from ..config import SETTINGS, Settings
+from ..evidence import EvidencePolicy
+from ..http_client import RateLimitedClient, RequestBudgetExceeded
+from ..keys import redact
 from ..models import Finding, Query, SiteRule, Verdict
 from ..provenance import finding_trace
 from ..verify.baseline import BaselineCache, evidence_from_response
@@ -53,22 +57,26 @@ def _is_wmn(s: dict) -> bool:
     return "error_type" not in s and any(k in s for k in ("m_code", "m_string", "e_code"))
 
 
-def load_sites(path: str | None = None) -> list[SiteRule]:
-    p = Path(path or SETTINGS.sites_data_file)
+def load_sites(path: str | None = None, settings: Settings = SETTINGS) -> list[SiteRule]:
+    p = Path(path or settings.sites_data_file).expanduser()
     if not p.is_absolute():
-        # resolve relative to project root (two parents up from this file's package)
-        root = Path(__file__).resolve().parents[3]
-        p = root / p
+        p = Path.cwd() / p
     raw = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or not isinstance(raw.get("sites"), list):
+        raise ValueError(f"invalid site dataset (expected a 'sites' list): {p}")
     rules: list[SiteRule] = []
-    excluded = SETTINGS.excluded_site_tags
-    for s in raw.get("sites", []):
-        if _is_wmn(s):
-            s = _from_wmn(s)
-        tags = {t.lower() for t in s.get("tags", [])}
-        if tags & excluded or s["name"].lower() in excluded:
-            continue
-        rules.append(SiteRule(**s))
+    excluded = settings.excluded_site_tags
+    for index, entry in enumerate(raw["sites"]):
+        try:
+            if not isinstance(entry, dict):
+                raise TypeError("entry is not an object")
+            site = _from_wmn(entry) if _is_wmn(entry) else entry
+            tags = {str(tag).lower() for tag in site.get("tags", [])}
+            if tags & excluded or str(site["name"]).lower() in excluded:
+                continue
+            rules.append(SiteRule(**site))
+        except (KeyError, TypeError, ValidationError) as exc:
+            raise ValueError(f"invalid site entry #{index} in {p}: {exc}") from exc
     return rules
 
 
@@ -84,8 +92,12 @@ async def _check_site(
     try:
         resp = await client.fetch(url)
         elapsed = int((time.monotonic() - started) * 1000)
-        ev = await evidence_from_response(url, resp, elapsed, query_term=account)
-        body = resp.text[: SETTINGS.max_body_bytes]
+        ev = await evidence_from_response(
+            url, resp, elapsed, query_term=account, settings=client.s
+        )
+        body = resp.text[: client.s.max_body_bytes]
+    except RequestBudgetExceeded:
+        raise
     except Exception as e:  # noqa: BLE001
         return Finding(
             source=f"username:{rule.name}",
@@ -94,10 +106,10 @@ async def _check_site(
             url=rule.uri_pretty.replace("{account}", account) if rule.uri_pretty else url,
             verdict=Verdict.ERROR,
             confidence=0.0,
-            reasons=[f"request failed: {e}"],
+            reasons=[f"request failed: {redact(str(e))}"],
         )
 
-    verdict, conf, reasons, breakdown = decide(rule, ev, body, base)
+    verdict, conf, reasons, breakdown = decide(rule, ev, body, base, settings=client.s)
     signals: dict[str, str] = {}
     if verdict == Verdict.FOUND:
         signals[f"username:{rule.name.lower()}"] = account
@@ -118,10 +130,15 @@ async def _check_site(
         reasons=reasons,
         breakdown=breakdown,
         trace=finding_trace(module="username", source=f"username:{rule.name}",
-                            rule=rule, ev=ev, baseline=base),
+                            rule=rule, ev=ev, baseline=base, settings=client.s),
         signals=signals,
         data={"status": ev.status, "title": ev.title, "final_url": ev.final_url,
               "fingerprint": ev.fingerprint, "phase": phase},
+        policy=(
+            EvidencePolicy.corroborated()
+            if verified
+            else EvidencePolicy.candidate()
+        ),
     )
 
 
@@ -129,7 +146,7 @@ async def collect(query: Query, client: RateLimitedClient, emit: EmitFn) -> None
     account = query.username
     if not account:
         return
-    sites = load_sites()
+    sites = load_sites(settings=client.s)
     baselines = BaselineCache(client)
     import asyncio
 

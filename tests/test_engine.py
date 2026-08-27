@@ -4,7 +4,7 @@ dedups so the same artifact is never processed twice."""
 import pytest
 
 from recon import engine as engine_mod
-from recon.engine import GraphScanEngine
+from recon.engine import GraphScanEngine, ScanCancelled
 from recon.graph_models import Artifact, ArtifactType
 from recon.models import Finding, Query, Verdict
 from recon.modules.base import Module
@@ -45,6 +45,19 @@ async def _run(query, settings=None):
 
 
 @pytest.mark.asyncio
+async def test_engine_honors_durable_job_cancellation_before_collection():
+    async def cancelled() -> bool:
+        return True
+
+    engine = GraphScanEngine(
+        Query(username="alice"), cancellation_requested=cancelled
+    )
+    with pytest.raises(ScanCancelled, match="cancelled by user"):
+        [event async for event in engine.stream()]
+    assert engine.stop_reason == "cancelled by user"
+
+
+@pytest.mark.asyncio
 async def test_recursion_cascades_domain_to_asn(monkeypatch):
     calls = {}
     _fake_registry(monkeypatch, calls)
@@ -62,6 +75,8 @@ async def test_recursion_cascades_domain_to_asn(monkeypatch):
 
     done = [e for e in events if e["type"] == "done"][0]
     assert done["artifacts"] == len(eng.artifacts)
+    summary = next(e["summary"] for e in events if e["type"] == "summary")
+    assert summary["profile"]["counts"]["artifacts"] == len(eng.artifacts)
 
 
 @pytest.mark.asyncio

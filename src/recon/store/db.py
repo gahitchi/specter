@@ -6,24 +6,35 @@ to a Postgres URL for scale-out. One SQLAlchemy layer covers both.
 
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
 from pathlib import Path
+import sqlite3
 from typing import Iterator, Optional
 
-from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from ..config import SETTINGS
-from .models_db import Base
+from ..config import SETTINGS, env_value
 
 
 class Database:
     def __init__(self, dsn: str) -> None:
         self.dsn = dsn
-        connect_args = {"check_same_thread": False} if dsn.startswith("sqlite") else {}
-        self.engine: Engine = create_engine(dsn, future=True, connect_args=connect_args)
+        connect_args = (
+            {"check_same_thread": False, "timeout": 30}
+            if dsn.startswith("sqlite")
+            else {}
+        )
+        engine_options = {"future": True, "connect_args": connect_args}
+        if not dsn.startswith("sqlite"):
+            engine_options.update({
+                "pool_pre_ping": True,
+                "pool_size": SETTINGS.db_pool_size,
+                "max_overflow": SETTINGS.db_max_overflow,
+                "pool_recycle": SETTINGS.db_pool_recycle_seconds,
+            })
+        self.engine: Engine = create_engine(dsn, **engine_options)
         if dsn.startswith("sqlite"):
             self._enable_sqlite_concurrency(self.engine)
         self._Session = sessionmaker(self.engine, expire_on_commit=False, future=True)
@@ -38,38 +49,83 @@ class Database:
         @event.listens_for(engine, "connect")
         def _set_pragmas(dbapi_conn, _record):  # pragma: no cover - driver callback
             cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA busy_timeout=5000")
-            cur.execute("PRAGMA synchronous=NORMAL")
-            cur.close()
+            try:
+                cur.execute("PRAGMA busy_timeout=30000")
+                try:
+                    cur.execute("PRAGMA journal_mode=WAL")
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower():
+                        raise
+                cur.execute("PRAGMA synchronous=NORMAL")
+                cur.execute("PRAGMA foreign_keys=ON")
+            finally:
+                cur.close()
 
     def create_all(self) -> None:
-        Base.metadata.create_all(self.engine)
-        if self.engine.dialect.name == "sqlite":
-            self._backfill_columns()
+        """Upgrade this database to the packaged Alembic head revision.
 
-    def _backfill_columns(self) -> None:
-        """Add any nullable columns introduced after a table was first created.
+        Kept under the historical method name so existing integrations continue
+        to work; schema creation and upgrades are now both migration-driven.
+        """
+        from alembic import command
+        from alembic.config import Config
 
-        SQLAlchemy's create_all never ALTERs existing tables, so a schema change
-        like `observations.breakdown` would otherwise break older local DBs. This
-        is a lightweight, data-preserving migration for the SQLite default (no
-        Alembic dependency); Postgres deployments should use real migrations."""
-        insp = inspect(self.engine)
-        tables = set(insp.get_table_names())
-        with self.engine.begin() as conn:
-            for table in Base.metadata.sorted_tables:
-                if table.name not in tables:
-                    continue
-                have = {c["name"] for c in insp.get_columns(table.name)}
-                for col in table.columns:
-                    if col.name in have:
-                        continue
-                    if not col.nullable and col.default is None and col.server_default is None:
-                        continue  # can't safely add NOT NULL to populated rows
-                    coltype = col.type.compile(self.engine.dialect)
-                    conn.execute(text(
-                        f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {coltype}'))
+        migrations = Path(__file__).resolve().parents[1] / "migrations"
+        config = Config()
+        config.set_main_option("script_location", str(migrations))
+        config.set_main_option("sqlalchemy.url", self.dsn.replace("%", "%%"))
+
+        def upgrade(connection) -> None:
+            config.attributes["connection"] = connection
+            command.upgrade(config, "head")
+
+        with self.engine.connect() as connection:
+            if connection.dialect.name != "sqlite":
+                with connection.begin():
+                    upgrade(connection)
+                return
+
+            # Every local service validates migrations at startup. Serialize that
+            # check across processes so a fresh database cannot race while Alembic
+            # creates its version table or applies the first revision.
+            connection.exec_driver_sql("BEGIN EXCLUSIVE")
+            try:
+                upgrade(connection)
+            except Exception:
+                connection.rollback()
+                raise
+            connection.commit()
+
+    def migration_head(self) -> str | None:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        migrations = Path(__file__).resolve().parents[1] / "migrations"
+        config = Config()
+        config.set_main_option("script_location", str(migrations))
+        return ScriptDirectory.from_config(config).get_current_head()
+
+    def ensure_schema(self, *, auto_upgrade: bool) -> None:
+        if auto_upgrade:
+            self.create_all()
+            return
+        current = self.schema_revision()
+        head = self.migration_head()
+        if current != head:
+            raise RuntimeError(
+                f"database schema is not current (current={current or 'none'}, head={head}); "
+                "run `specter db-upgrade` before starting the service"
+            )
+
+    def ping(self) -> None:
+        with self.engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+
+    def schema_revision(self) -> str | None:
+        from alembic.runtime.migration import MigrationContext
+
+        with self.engine.connect() as connection:
+            return MigrationContext.configure(connection).get_current_revision()
 
     @contextmanager
     def session(self) -> Iterator[Session]:
@@ -99,13 +155,39 @@ class Database:
 
 
 def _default_dsn() -> str:
-    dsn = os.environ.get("RECON_DB_DSN") or SETTINGS.storage_dsn
+    configured = env_value("RECON_DB_DSN")
+    dsn = configured or SETTINGS.storage_dsn
+    if configured is None:
+        dsn = _migrate_legacy_database(dsn)
     if dsn.startswith("sqlite") and ":memory:" not in dsn:
         # Ensure parent dir exists for file-based sqlite.
         path = dsn.split("///", 1)[-1]
         if path:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
     return dsn
+
+
+def _migrate_legacy_database(target_dsn: str) -> str:
+    """Copy the old working-directory database into the stable app data path."""
+    if not target_dsn.startswith("sqlite:///") or ":memory:" in target_dsn:
+        return target_dsn
+    target = Path(target_dsn.split("///", 1)[-1])
+    legacy = (Path.cwd() / "data" / "recon.db").resolve()
+    try:
+        if target.resolve() == legacy or target.exists() or not legacy.is_file():
+            return target_dsn
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source = sqlite3.connect(legacy)
+        destination = sqlite3.connect(target)
+        try:
+            source.backup(destination)
+        finally:
+            destination.close()
+            source.close()
+        return target_dsn
+    except (OSError, sqlite3.Error):
+        target.unlink(missing_ok=True)
+        return f"sqlite:///{legacy.as_posix()}"
 
 
 _DB: Optional[Database] = None
@@ -115,7 +197,7 @@ def get_db() -> Database:
     global _DB
     if _DB is None:
         _DB = Database(_default_dsn())
-        _DB.create_all()  # idempotent; guarantees tables exist for any caller
+        _DB.ensure_schema(auto_upgrade=SETTINGS.auto_migrate)
     return _DB
 
 
@@ -127,3 +209,10 @@ def init_db(dsn: str | None = None) -> Database:
     _DB = Database(dsn or _default_dsn())
     _DB.create_all()
     return _DB
+
+
+def close_db() -> None:
+    global _DB
+    if _DB is not None:
+        _DB.close()
+        _DB = None

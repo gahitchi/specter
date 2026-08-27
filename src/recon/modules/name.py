@@ -4,6 +4,7 @@ collector). Terminal — emits evidence but no further artifacts."""
 from __future__ import annotations
 
 from ..collectors import name as _name
+from ..evidence import EvidencePolicy
 from ..graph_models import Artifact, ArtifactType
 from ..models import Query
 from .base import Module, ModuleContext
@@ -19,4 +20,5 @@ MODULE = Module(
     produces=set(),
     run=_run,
     reliability_prior=0.60,
+    evidence_policy=EvidencePolicy.candidate(),
 )

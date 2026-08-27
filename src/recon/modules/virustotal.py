@@ -18,7 +18,7 @@ async def _run(art: Artifact, ctx: ModuleContext) -> None:
         return
     path = (f"/ip_addresses/{art.normalized}" if art.type == ArtifactType.IP_ADDRESS
             else f"/domains/{art.normalized}")
-    resp = await ctx.client._client.get(
+    resp = await ctx.client.fetch(
         f"{_API}{path}", headers={"x-apikey": key, "User-Agent": ctx.settings.user_agent})
     if resp.status_code != 200:
         await ctx.emit_finding(Finding(

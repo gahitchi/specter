@@ -9,7 +9,10 @@ correlation agree on what "the same value" means.
 from __future__ import annotations
 
 import re
+import ipaddress
 from urllib.parse import urlsplit, urlunsplit
+
+import phonenumbers
 
 _WS = re.compile(r"\s+")
 
@@ -64,6 +67,24 @@ def norm_email(s: str | None) -> str | None:
     return f"{local.lower()}@{norm_domain(domain)}"
 
 
+def norm_phone(s: str | None) -> str | None:
+    """Use E.164 when an international number is valid; preserve invalid input.
+
+    Preserving invalid explicit input lets the phone collector explain the
+    validation failure instead of making the identifier disappear silently.
+    """
+    s = norm_text(s)
+    if not s:
+        return None
+    try:
+        number = phonenumbers.parse(s, None)
+    except phonenumbers.NumberParseException:
+        return s
+    if phonenumbers.is_valid_number(number):
+        return phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.E164)
+    return s
+
+
 def norm_domain(s: str | None) -> str | None:
     s = norm_text(s)
     if not s:
@@ -77,6 +98,16 @@ def norm_domain(s: str | None) -> str | None:
     return s or None
 
 
+def norm_ip(s: str | None) -> str | None:
+    s = norm_text(s)
+    if not s:
+        return None
+    try:
+        return ipaddress.ip_address(s).compressed
+    except ValueError:
+        return s.casefold()
+
+
 def norm_url(s: str | None) -> str | None:
     s = norm_text(s)
     if not s:
@@ -86,7 +117,10 @@ def norm_url(s: str | None) -> str | None:
     if netloc.startswith("www."):
         netloc = netloc[4:]
     path = parts.path.rstrip("/")
-    return urlunsplit((parts.scheme or "https", netloc, path, "", ""))
+    # Fragments are client-side state and never identify a different resource.
+    # Query strings can be identity-bearing (for example `/user?id=alice`) and
+    # must not be discarded during canonicalization.
+    return urlunsplit((parts.scheme or "https", netloc, path, parts.query, ""))
 
 
 def canonical_platform(name: str | None) -> str | None:

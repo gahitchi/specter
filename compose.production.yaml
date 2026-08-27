@@ -1,0 +1,185 @@
+name: specter
+
+x-app-image: &app-image ${RECON_IMAGE_REF:-ghcr.io/gahitchi/specter:0.11.0}
+
+x-app-environment: &app-environment
+  RECON_ENV: production
+  RECON_AUTO_MIGRATE: "0"
+  RECON_DB_DSN_FILE: /run/secrets/db_dsn
+  RECON_REDIS_DSN_FILE: /run/secrets/redis_dsn
+  RECON_QUEUE_BACKEND: arq
+  RECON_ENABLE_EXPANSION: "1"
+  RECON_LOG_FORMAT: json
+
+x-app-secrets: &app-secrets
+  - db_dsn
+  - redis_dsn
+
+services:
+  db:
+    image: ${POSTGRES_IMAGE_REF:-postgres:17-alpine@sha256:d4bb0a8c1b7bb2e29f976d099e7bfb9a5d8858cffe9e46b35cd302cd1f1f8168}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-recon}
+      POSTGRES_USER: ${POSTGRES_USER:-recon}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      backend:
+        ipv4_address: 172.30.0.20
+
+  redis:
+    image: ${REDIS_IMAGE_REF:-redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2}
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -ec
+      - exec redis-server --appendonly yes --requirepass "$$(cat /run/secrets/redis_password)"
+    secrets:
+      - redis_password
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      backend:
+        ipv4_address: 172.30.0.30
+
+  migrate:
+    image: *app-image
+    command: ["db-upgrade"]
+    environment: *app-environment
+    secrets:
+      - db_dsn
+      - redis_dsn
+      - admin_password
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - backend
+
+  web:
+    image: *app-image
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+      RECON_HOST: 0.0.0.0
+      RECON_PORT: "8000"
+      RECON_REMOTE_MODE: "1"
+      RECON_AUTH_REQUIRED: "1"
+      RECON_ALLOWED_HOSTS: ${RECON_DOMAIN:?set RECON_DOMAIN}
+      RECON_TLS_TERMINATION: proxy
+      RECON_FORWARDED_ALLOW_IPS: 172.30.0.10
+      RECON_ALLOW_LIVE_SCANS: "0"
+      RECON_ALLOW_KEY_WRITES: "0"
+      RECON_METRICS_ENABLED: "1"
+      RECON_METRICS_TOKEN_FILE: /run/secrets/metrics_token
+    secrets:
+      - db_dsn
+      - redis_dsn
+      - metrics_token
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - backend
+
+  worker:
+    image: *app-image
+    command: ["worker"]
+    restart: unless-stopped
+    environment: *app-environment
+    secrets: *app-secrets
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+
+  scheduler:
+    image: *app-image
+    command: ["monitor"]
+    restart: unless-stopped
+    environment: *app-environment
+    secrets: *app-secrets
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+
+  proxy:
+    image: ${CADDY_IMAGE_REF:-caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d}
+    restart: unless-stopped
+    environment:
+      RECON_DOMAIN: ${RECON_DOMAIN:?set RECON_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      backend:
+        ipv4_address: 172.30.0.10
+      frontend:
+
+secrets:
+  db_password:
+    file: ./deploy/secrets/db_password
+  db_dsn:
+    file: ./deploy/secrets/db_dsn
+  redis_password:
+    file: ./deploy/secrets/redis_password
+  redis_dsn:
+    file: ./deploy/secrets/redis_dsn
+  metrics_token:
+    file: ./deploy/secrets/metrics_token
+  admin_password:
+    file: ./deploy/secrets/admin_password
+
+volumes:
+  postgres-data:
+  redis-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  frontend:
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

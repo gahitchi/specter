@@ -8,9 +8,8 @@ be audited term by term — `0.85 = 0.50 prior +0.20 status-vs-baseline
 +0.20 content-differs -0.05 …` — and so downstream tooling (calibration,
 analytics) can reason about *which signals* drive confidence.
 
-`shadow_total` carries an alternative score under source-independence weighting
-(see `trust/independence.py`). In Phase 5a it is displayed but not applied to the
-official `total`; calibration decides whether to flip it on.
+`shadow_total` carries the alternative connector-name breadth calculation for
+audit comparison. The official score uses independent upstream classes.
 """
 
 from __future__ import annotations
@@ -33,6 +32,7 @@ class ScoreBreakdown(BaseModel):
     total: float = 0.0
     shadow_total: Optional[float] = None
     shadow_note: Optional[str] = None
+    dimensions: dict[str, float] = Field(default_factory=dict)
 
     def add(self, term: str, delta: float, reason: str = "",
             layer: str = "verdict") -> "ScoreBreakdown":

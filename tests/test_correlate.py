@@ -4,6 +4,7 @@ from recon.correlate.resolver import classify, record_from, score
 from recon.correlate.graph import correlate_run
 from recon.monitor.diff import diff_run
 from recon.models import Finding, Query, Verdict
+from recon.evidence import EvidencePolicy
 from recon.store import get_db, repo
 
 
@@ -33,6 +34,16 @@ def test_distinct_people_stay_separate():
     assert classify(w) == "DISTINCT"
 
 
+def test_shared_domain_is_not_identity_proof():
+    a = _rec(1, "domain", "DNS", {"domain": "example.com"})
+    b = _rec(2, "network", "rDNS", {"domain": "example.com"})
+
+    weight, reasons = score(a, b)
+
+    assert weight == 0
+    assert reasons == []
+
+
 def _seed_run(query, findings):
     db = get_db()
     with db.session() as s:
@@ -55,15 +66,41 @@ def test_correlate_run_clusters_by_strong_signal():
                 verdict=Verdict.UNCERTAIN, confidence=0.5, signals={"orcid": "0000-9"}),
     ])
     summary = correlate_run(db, rid)
-    # Ada's two email-linked observations merge; Babbage stays separate.
-    assert summary["identities"] == 2
+    # Ada's two confirmed observations merge. The unconfirmed Babbage candidate
+    # is retained as an observation but cannot create or influence an identity.
+    assert summary["identities"] == 1
     top = summary["clusters"][0]
     assert top["found"] >= 2
+    assert top["uncertain"] == 0
 
 
-def test_conflict_resolution_picks_canonical_by_reliability():
-    # Both observations share gravatar_hash AND email (so they merge), but assert
-    # different orcids. The higher-reliability source's orcid wins as canonical.
+def test_infrastructure_observations_do_not_create_identity_entities():
+    db, _target_id, run_id = _seed_run(Query(domain="example.com"), [
+        Finding(
+            source="domain:dns",
+            category="domain",
+            label="DNS example.com",
+            verdict=Verdict.FOUND,
+            confidence=0.9,
+            signals={"domain": "example.com"},
+        ),
+        Finding(
+            source="resolve:dns",
+            category="dns",
+            label="Resolve example.com",
+            verdict=Verdict.FOUND,
+            confidence=0.9,
+            signals={"domain": "example.com"},
+        ),
+    ])
+
+    summary = correlate_run(db, run_id)
+
+    assert summary["identities"] == 0
+    assert summary["clusters"] == []
+
+
+def test_conflicting_strong_identifiers_block_merge_instead_of_picking_a_winner():
     db = get_db()
     with db.session() as s:
         t = repo.get_or_create_target(s, Query(email="ada@x.com"))
@@ -82,9 +119,8 @@ def test_conflict_resolution_picks_canonical_by_reliability():
         rid2 = r.id
 
     summary = correlate_run(db, rid2)
-    merged = [c for c in summary["clusters"] if "_canonical" in c["signals"]]
-    assert merged, "expected a single merged cluster with a resolved conflict"
-    assert merged[0]["signals"]["_canonical"]["orcid"] == "0000-1"
+    assert summary["identities"] == 2
+    assert all("_canonical" not in cluster["signals"] for cluster in summary["clusters"])
 
 
 def test_diff_detects_appeared_account():
@@ -92,6 +128,7 @@ def test_diff_detects_appeared_account():
     db, tid, r1 = _seed_run(q, [
         Finding(source="username:GitHub", category="username", label="GitHub",
                 url="https://github.com/alice", verdict=Verdict.FOUND, confidence=1.0,
+                signals={"username:github": "alice"},
                 data={"fingerprint": "aaaa"}),
     ])
     assert diff_run(db, tid, r1) == []  # first run: no alarms
@@ -100,16 +137,34 @@ def test_diff_detects_appeared_account():
         t = repo.get_or_create_target(s, q)
         r2 = repo.create_run(s, t)
         repo.add_observation(s, r2, Finding(
-            source="username:GitHub", category="username", label="GitHub",
-            url="https://github.com/alice", verdict=Verdict.FOUND, confidence=1.0,
-            data={"fingerprint": "aaaa"}))
+                source="username:GitHub", category="username", label="GitHub",
+                url="https://github.com/alice", verdict=Verdict.FOUND, confidence=1.0,
+                signals={"username:github": "alice"},
+                data={"fingerprint": "aaaa"}))
         repo.add_observation(s, r2, Finding(
-            source="username:GitLab", category="username", label="GitLab",
-            url="https://gitlab.com/alice", verdict=Verdict.FOUND, confidence=1.0,
-            data={"fingerprint": "bbbb"}))
+                source="username:GitLab", category="username", label="GitLab",
+                url="https://gitlab.com/alice", verdict=Verdict.FOUND, confidence=1.0,
+                signals={"username:gitlab": "alice"},
+                data={"fingerprint": "bbbb"}))
         repo.finish_run(s, r2, "done", {})
         r2id = r2.id
 
     changes = diff_run(db, tid, r2id)
     kinds = {(c["kind"], c["label"]) for c in changes}
     assert ("appeared", "GitLab") in kinds
+
+
+def test_diff_ignores_contextual_found_records_that_are_not_identity_evidence():
+    query = Query(email="alice@example.com")
+    db, target_id, _run_id = _seed_run(query, [Finding(
+        source="email:mx", category="email", label="MX for example.com",
+        verdict=Verdict.FOUND, confidence=0.6,
+        policy=EvidencePolicy(confirmation_allowed=False, pivot_allowed=False),
+    )])
+    with db.session() as session:
+        target = repo.get_or_create_target(session, query)
+        current = repo.create_run(session, target)
+        repo.finish_run(session, current, "done", {})
+        current_id = current.id
+
+    assert diff_run(db, target_id, current_id) == []

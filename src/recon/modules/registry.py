@@ -13,15 +13,20 @@ from . import (
     abuseipdb,
     asn,
     breach,
+    bluesky,
     commoncrawl,
     dns_intel,
     domain,
     email,
     github,
+    gitlab,
+    hackernews,
     ip_geo,
+    maigret,
     name,
     permute,
     phone,
+    phone_web,
     profile_links,
     resolve,
     ripestat,
@@ -29,14 +34,17 @@ from . import (
     username,
     virustotal,
     wayback,
+    wikidata,
 )
 from .base import Module
 
 MODULES: list[Module] = [
     # Phase 1 — core collectors + recursive engine
     username.MODULE,
+    maigret.MODULE,
     email.MODULE,
     phone.MODULE,
+    phone_web.MODULE,
     name.MODULE,
     domain.MODULE,
     resolve.MODULE,
@@ -57,6 +65,11 @@ MODULES: list[Module] = [
     shodan.MODULE,
     virustotal.MODULE,
     abuseipdb.MODULE,
+    # Optional expansion pack: dispatched only after the maturity gate passes.
+    gitlab.MODULE,
+    bluesky.MODULE,
+    hackernews.MODULE,
+    wikidata.MODULE,
 ]
 
 
@@ -64,5 +77,5 @@ def get_modules() -> list[Module]:
     return MODULES
 
 
-def applicable_modules(art: Artifact) -> list[Module]:
-    return [m for m in MODULES if m.accepts(art)]
+def applicable_modules(art: Artifact, *, expansion_enabled: bool = False) -> list[Module]:
+    return [m for m in MODULES if m.accepts(art, expansion_enabled=expansion_enabled)]

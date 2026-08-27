@@ -15,13 +15,31 @@ from recon.models import Finding, Query, Verdict
 
 def _findings():
     return [
-        Finding(source="github", category="account", label="GitHub torvalds",
-                url="https://github.com/torvalds", verdict=Verdict.FOUND,
-                confidence=0.95, reasons=["site rule matched", "status 200 vs baseline 404"]),
-        Finding(source="pypi", category="account", label="PyPI torvalds",
-                verdict=Verdict.NOT_FOUND, confidence=0.0, reasons=["soft-404 rejected"]),
-        Finding(source="medium", category="account", label="Medium torvalds",
-                verdict=Verdict.UNCERTAIN, confidence=0.4, reasons=["content differs weakly"]),
+        Finding(
+            source="github",
+            category="account",
+            label="GitHub torvalds",
+            url="https://github.com/torvalds",
+            verdict=Verdict.FOUND,
+            confidence=0.95,
+            reasons=["site rule matched", "status 200 vs baseline 404"],
+        ),
+        Finding(
+            source="pypi",
+            category="account",
+            label="PyPI torvalds",
+            verdict=Verdict.NOT_FOUND,
+            confidence=0.0,
+            reasons=["soft-404 rejected"],
+        ),
+        Finding(
+            source="medium",
+            category="account",
+            label="Medium torvalds",
+            verdict=Verdict.UNCERTAIN,
+            confidence=0.4,
+            reasons=["content differs weakly"],
+        ),
     ]
 
 
@@ -29,7 +47,7 @@ def test_to_json_embeds_provenance_and_reasons():
     q = Query(username="torvalds")
     payload = json.loads(reporting.to_json(q, _findings(), {"hits": 1}))
 
-    assert payload["tool"] == "osint-recon"
+    assert payload["tool"] == "Specter"
     assert payload["query"] == {"username": "torvalds"}
     assert payload["summary"] == {"hits": 1}
     # provenance block is present and stamps the tool version.
@@ -48,19 +66,95 @@ def test_to_csv_has_header_and_one_row_per_finding():
     assert "site rule matched | status 200 vs baseline 404" in csv_text
 
 
-def test_to_pdf_html_only_renders_hits():
+def test_to_pdf_html_renders_notable_findings():
     html = reporting.to_pdf_html(Query(username="torvalds"), _findings(), {"hits": 1})
-    # FOUND + UNCERTAIN are hits; NOT_FOUND is not rendered as a row.
+    # UNCERTAIN stays visible and clearly labeled, but is not counted as a hit.
     assert "GitHub torvalds" in html
     assert "Medium torvalds" in html
     assert "PyPI torvalds" not in html
     assert reporting.DISCLAIMER in html
+    assert "Executive assessment" in html
+    assert "Not observed" in html
+
+
+def test_to_pdf_html_renders_profile_standing_and_gaps():
+    summary = {
+        "identities": 0,
+        "profile": {
+            "title": "alice",
+            "status": "partial",
+            "confidence": 0.72,
+            "assessment": "Confirmed account; independent corroboration remains limited.",
+            "identifiers": [
+                {
+                    "type": "username",
+                    "value": "alice",
+                    "standing": "provided",
+                    "confidence": 1.0,
+                }
+            ],
+            "accounts": [],
+            "gaps": ["No contact identifier was independently confirmed."],
+            "completeness_note": "Evidence coverage is not proof of completeness.",
+            "phone_research": {
+                "number": "+14155552671",
+                "allocation": {"region_code": "US"},
+                "allocation_note": "Allocation is not subscriber identity.",
+                "ownership_note": "Current ownership was not established.",
+                "lifecycle": {"state": "person_association_candidate"},
+                "identity_links": [
+                    {
+                        "type": "email",
+                        "value": "alice@example.com",
+                        "standing": "candidate",
+                        "independent_origins": 1,
+                    }
+                ],
+                "mentions": [
+                    {
+                        "title": "Alice contact",
+                        "association": "person_record",
+                        "url": "https://profile.example/contact",
+                    }
+                ],
+                "decision": {"recommended_action": "Wait for another independent page."},
+            },
+        },
+    }
+
+    html = reporting.to_pdf_html(Query(username="alice"), _findings(), summary)
+
+    assert "Profile synthesis" in html
+    assert "provided" in html
+    assert "No contact identifier" in html
+    assert "Next justified step" in html
+    assert "Wait for another independent page" in html
+    assert "person record" in html
+
+
+def test_html_and_csv_escape_untrusted_source_text():
+    findings = [
+        Finding(
+            source="<script>alert(1)</script>",
+            category="account",
+            label="=CMD()",
+            verdict=Verdict.FOUND,
+            confidence=0.9,
+            reasons=["<img src=x onerror=alert(1)>"],
+        )
+    ]
+    html = reporting.to_pdf_html(Query(username="<x>"), findings, {})
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html and "&lt;img" in html
+    csv_text = reporting.to_csv(findings)
+    assert "'=CMD()" in csv_text
 
 
 def test_save_json_writes_file(tmp_path):
     out = tmp_path / "report.json"
-    path = reporting.save(Query(username="torvalds"), _findings(), {"hits": 1},
-                          fmt="json", out=str(out))
+    path = reporting.save(
+        Query(username="torvalds"), _findings(), {"hits": 1}, fmt="json", out=str(out)
+    )
     assert path == out
     payload = json.loads(out.read_text())
     assert payload["findings"][0]["source"] == "github"
@@ -74,6 +168,7 @@ def test_save_unknown_format_raises(tmp_path):
 def test_save_pdf_falls_back_to_html_when_weasyprint_missing(tmp_path, monkeypatch):
     # Force the optional weasyprint import to fail; save() must degrade to .html.
     import builtins
+
     real_import = builtins.__import__
 
     def fake_import(name, *a, **k):
@@ -82,8 +177,9 @@ def test_save_pdf_falls_back_to_html_when_weasyprint_missing(tmp_path, monkeypat
         return real_import(name, *a, **k)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    path = reporting.save(Query(username="x"), _findings(), {}, fmt="pdf",
-                          out=str(tmp_path / "r.pdf"))
+    path = reporting.save(
+        Query(username="x"), _findings(), {}, fmt="pdf", out=str(tmp_path / "r.pdf")
+    )
     assert path.suffix == ".html"
     assert path.exists()
 
