@@ -59,6 +59,10 @@ class ArqQueue(JobQueue):
             kind, payload, run_id, owner_id=owner_id, target_id=target_id
         )
 
+        self._dispatch(job_id)
+        return job_id
+
+    def _dispatch(self, job_id: int) -> None:
         async def push() -> None:
             pool = await create_pool(
                 self._redis_settings,
@@ -78,7 +82,6 @@ class ArqQueue(JobQueue):
             message = f"Redis dispatch failed ({type(exc).__name__})"
             self._local.dispatch_failed(job_id, message)
             raise RuntimeError(message) from exc
-        return job_id
 
     def lease(self) -> Optional[dict]:
         return self._local.lease()
@@ -92,9 +95,29 @@ class ArqQueue(JobQueue):
     def status(self, job_id: int) -> Optional[str]:
         return self._local.status(job_id)
 
+    def request_cancel(self, job_id: int) -> Optional[str]:
+        return self._local.request_cancel(job_id)
+
+    def cancellation_requested(self, job_id: int) -> bool:
+        return self._local.cancellation_requested(job_id)
+
+    def mark_cancelled(self, job_id: int) -> None:
+        self._local.mark_cancelled(job_id)
+
+    def retry(self, job_id: int) -> Optional[str]:
+        previous = self._local.status(job_id)
+        status = self._local.retry(job_id)
+        if status == "queued" and previous not in {"queued", "leased", "cancel_requested"}:
+            self._dispatch(job_id)
+        return status
+
+    def release(self, job_id: int) -> None:
+        self._local.release(job_id)
+
 
 async def run_scan_job(_ctx: dict, durable_job_id: int) -> dict:
     """ARQ entrypoint: claim, execute, and update the durable SQL job row."""
+    from ..engine import ScanCancelled
     from .worker import process
 
     queue = LocalQueue()
@@ -105,7 +128,10 @@ async def run_scan_job(_ctx: dict, durable_job_id: int) -> dict:
             return {"job_id": durable_job_id, "status": "already_done"}
         raise RuntimeError(f"durable job {durable_job_id} is not claimable ({status})")
     try:
-        run_id = await process(job)
+        run_id = await process(job, queue)
+    except ScanCancelled:
+        await asyncio.to_thread(queue.mark_cancelled, durable_job_id)
+        return {"job_id": durable_job_id, "status": "cancelled"}
     except Exception as exc:
         await asyncio.to_thread(queue.fail, durable_job_id, redact(str(exc)))
         raise

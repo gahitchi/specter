@@ -76,7 +76,6 @@ def test_dashboard_exposes_scan_feedback_and_filters() -> None:
 
     assert {
         "q",
-        "save",
         "go",
         "status",
         "results",
@@ -94,6 +93,8 @@ def test_dashboard_exposes_scan_feedback_and_filters() -> None:
         "live-graph-status",
         "live-graph-fit",
         "live-graph-pause",
+        "job-cancel",
+        "job-retry",
         "research-room",
         "research-phases",
         "research-now-title",
@@ -149,7 +150,9 @@ def test_dashboard_starts_with_typed_clues_for_one_subject() -> None:
     assert '<details class="additional-clues">' in markup
     assert "Profile, website and network clues" in markup
     assert ">Start research</button>" in markup
-    assert ">Save as investigation</button>" in markup
+    assert 'name="authorization_basis"' in markup
+    assert 'name="authorized"' in markup
+    assert "Research is saved automatically" in markup
     assert "function updateClueSummary()" in script
     assert 'reuse.textContent = "Add to identity clues"' in script
     assert 'input.closest(".additional-clues")' in script
@@ -205,6 +208,36 @@ def test_results_prioritize_conclusions_and_progressively_reveal_detail() -> Non
     assert ".evidence-item-main" in style
     assert ".mention-group-list" in style
     assert ".phone-answer" in style
+
+
+def test_research_runs_as_a_recoverable_background_job() -> None:
+    markup = files("recon").joinpath("web/index.html").read_text(encoding="utf-8")
+    script = files("recon").joinpath("web/app.js").read_text(encoding="utf-8")
+
+    assert 'id="job-cancel"' in markup
+    assert 'id="job-retry"' in markup
+    assert "Research is saved automatically" in markup
+    assert 'const ACTIVE_JOB_KEY = "specter.active-job"' in script
+    assert "async function restoreActiveResearch()" in script
+    assert "/api/jobs?active=true&limit=1" in script
+    assert "/cancel`" in script
+    assert "/retry`" in script
+    assert "new EventSource" not in script
+
+
+def test_saved_research_and_source_limits_are_actionable() -> None:
+    markup = files("recon").joinpath("web/index.html").read_text(encoding="utf-8")
+    script = files("recon").joinpath("web/app.js").read_text(encoding="utf-8")
+
+    assert "Saved subjects" in markup
+    assert "Sources and limits" in markup
+    assert "function preloadTarget(" in script
+    assert "Research again" in script
+    assert "Change monitoring" in script
+    assert "authorization basis for recurring research" in script
+    assert "/report/html" in script and "/report/csv" in script
+    assert "Applicable policies" in script
+    assert "Can establish" in script
 
 
 def test_dashboard_assets_are_local_and_revisioned() -> None:

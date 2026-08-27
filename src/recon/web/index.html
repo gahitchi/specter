@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark" />
   <title>New investigation - Specter</title>
   <link rel="icon" type="image/png" href="/icon.png?v=bfaef8a7a5e4" />
-  <link rel="stylesheet" href="/static/style.css?v=0c022a191f68" />
+  <link rel="stylesheet" href="/static/style.css?v=9d1f39746c4b" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to workspace</a>
@@ -130,13 +130,28 @@
                   <label class="identifier-field identifier-field-half"><span>IP address</span><input name="ip_address" placeholder="8.8.8.8" autocapitalize="none" spellcheck="false" /></label>
                 </div>
               </details>
+              <div class="authorization-check">
+                <label>
+                  <span>Authorization</span>
+                  <select name="authorization_basis" required>
+                    <option value="">Select basis</option>
+                    <option value="self_owned">My own information or assets</option>
+                    <option value="documented_authorization">Documented permission</option>
+                    <option value="legitimate_public_interest">Legitimate public-interest research</option>
+                  </select>
+                </label>
+                <label class="authorization-confirm">
+                  <input name="authorized" type="checkbox" value="true" required />
+                  <span>I confirm this research is authorized, necessary, and appropriately scoped.</span>
+                </label>
+                <p>Selected public sources receive only the clue needed for their check. Their own logging and retention policies may apply.</p>
+              </div>
             </fieldset>
             <div class="scan-actions">
               <div class="action-group">
                 <button type="submit" id="go" class="primary-action">Start research</button>
-                <button type="button" id="save" class="secondary-action">Save as investigation</button>
               </div>
-              <span id="status" class="scan-status" role="status" aria-live="polite">Ready</span>
+              <span id="status" class="scan-status" role="status" aria-live="polite">Ready. Research is saved automatically.</span>
             </div>
           </form>
 
@@ -153,6 +168,8 @@
               </div>
               <div class="execution-actions">
                 <span id="live-graph-status" class="status-text" role="status" aria-live="polite">Idle</span>
+                <button type="button" id="job-cancel" class="danger-action" hidden>Cancel research</button>
+                <button type="button" id="job-retry" class="secondary-action" hidden>Retry research</button>
                 <div class="research-mode-switch" role="group" aria-label="Research room view">
                   <button type="button" class="active" data-research-mode="focus" aria-pressed="true">Focus</button>
                   <button type="button" data-research-mode="explore" aria-pressed="false">Explore</button>
@@ -189,7 +206,7 @@
                     <span><i class="running-node"></i>In progress</span>
                     <span><i class="success-node"></i>Positive observation</span>
                     <span><i class="uncertain-node"></i>Needs checking</span>
-                    <span><i class="not-found-node"></i>Not found / error</span>
+                    <span><i class="not-found-node"></i>No observation</span>
                     <span><i class="process-shape"></i>Process</span>
                     <span><i class="artifact-shape"></i>New lead</span>
                   </div>
@@ -285,12 +302,12 @@
 
         <section class="panel" id="panel-investigations" aria-labelledby="investigations-heading">
           <h2 id="investigations-heading" class="sr-only">Investigations</h2>
-          <section class="section-block">
-            <div class="section-heading"><h3>Targets</h3></div>
+          <section class="section-block first-section">
+            <div class="section-heading"><div><span class="eyebrow">Your research</span><h3>Saved subjects</h3><p>Open the original clues, repeat an authorized investigation, or watch for future changes.</p></div></div>
             <div id="targets" class="data-region"></div>
           </section>
           <section class="section-block">
-            <div class="section-heading"><h3>Recent runs</h3></div>
+            <div class="section-heading"><div><span class="eyebrow">History</span><h3>Recent research</h3><p>Read a completed result or download its evidence record.</p></div></div>
             <div id="runs" class="data-region"></div>
           </section>
         </section>
@@ -428,7 +445,7 @@
         <section class="panel" id="panel-sources" aria-labelledby="sources-heading">
           <h2 id="sources-heading" class="sr-only">Source health</h2>
           <section class="section-block first-section">
-            <div class="section-heading"><h3>Reliability monitor</h3></div>
+            <div class="section-heading"><div><span class="eyebrow">Collection transparency</span><h3>Sources and limits</h3><p>See who receives each clue, what the check can establish, and whether it is currently healthy.</p></div></div>
             <div id="sources" class="data-region"></div>
           </section>
         </section>
@@ -490,6 +507,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0e5b3f1d9d01"></script>
+  <script src="/static/app.js?v=7b40244f8b47"></script>
 </body>
 </html>

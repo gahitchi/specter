@@ -17,9 +17,11 @@ artifacts and the edges between them are exposed on the instance
 from __future__ import annotations
 
 import asyncio
+import inspect
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
 from typing import AsyncIterator, Optional
 
 from .activity import ACTIVE_PROCESS_ID, artifact_activity_id
@@ -77,6 +79,12 @@ _TYPE_PRIORITY = {
     ArtifactType.PHONE: 95,
     ArtifactType.NAME: 10,
 }
+
+CancellationCheck = Callable[[], bool | Awaitable[bool]]
+
+
+class ScanCancelled(Exception):
+    """Raised when a durable job receives an operator cancellation request."""
 
 
 @dataclass
@@ -160,7 +168,11 @@ class _Edge:
 
 class GraphScanEngine:
     def __init__(
-        self, query: Query, settings: Settings = SETTINGS, intake: dict | None = None
+        self,
+        query: Query,
+        settings: Settings = SETTINGS,
+        intake: dict | None = None,
+        cancellation_requested: CancellationCheck | None = None,
     ) -> None:
         self.query = query.normalized()
         self.settings = settings
@@ -172,6 +184,7 @@ class GraphScanEngine:
         self.stop_reason: Optional[str] = None
         self.reasoning: dict = {}
         self.reasoner = InvestigationReasoner()
+        self._cancellation_requested = cancellation_requested
         # Traversal state.
         self._seen: set[str] = set()
         self._artifact_by_key: dict[str, Artifact] = {}
@@ -183,6 +196,16 @@ class GraphScanEngine:
             "blocked": 0,
             "promoted_after_corroboration": 0,
         }
+
+    async def _raise_if_cancelled(self) -> None:
+        if self._cancellation_requested is None:
+            return
+        requested = self._cancellation_requested()
+        if inspect.isawaitable(requested):
+            requested = await requested
+        if requested:
+            self.stop_reason = "cancelled by user"
+            raise ScanCancelled(self.stop_reason)
 
     @staticmethod
     def _priority(art: Artifact) -> tuple:
@@ -307,6 +330,7 @@ class GraphScanEngine:
             from .ratelimit import get_limiter
 
             try:
+                await self._raise_if_cancelled()
                 async with RateLimitedClient(
                     self.settings,
                     limiter=get_limiter(self.settings),
@@ -347,6 +371,7 @@ class GraphScanEngine:
                     frontier.sort(key=self._priority, reverse=True)
 
                     async def run_dispatch(art: Artifact, mod, process_id: str) -> None:
+                        await self._raise_if_cancelled()
                         dispatch_ctx = ctx.for_dispatch(process_id)
                         base_activity = {
                             "kind": "process",
@@ -368,6 +393,7 @@ class GraphScanEngine:
                         token = ACTIVE_PROCESS_ID.set(process_id)
                         try:
                             await mod.run_resilient(art, dispatch_ctx)
+                            await self._raise_if_cancelled()
                         except RequestBudgetExceeded:
                             await emit_activity(
                                 {
@@ -407,6 +433,7 @@ class GraphScanEngine:
 
                     batch_size = max(1, self.settings.max_concurrency)
                     while frontier:
+                        await self._raise_if_cancelled()
                         if client.request_count >= self.settings.max_requests:
                             self.stop_reason = self.stop_reason or "max_requests reached"
                             break
@@ -435,6 +462,7 @@ class GraphScanEngine:
                         requests_before = client.request_count
                         stopped = False
                         for i in range(0, len(dispatches), batch_size):
+                            await self._raise_if_cancelled()
                             if client.request_count >= self.settings.max_requests:
                                 self.stop_reason = self.stop_reason or "max_requests reached"
                                 stopped = True
@@ -447,6 +475,12 @@ class GraphScanEngine:
                                     run_dispatch(art, mod, f"process:{process_sequence}")
                                 )
                             results = await asyncio.gather(*scheduled, return_exceptions=True)
+                            cancelled = next(
+                                (result for result in results if isinstance(result, ScanCancelled)),
+                                None,
+                            )
+                            if cancelled is not None:
+                                raise cancelled
                             if client.budget_exhausted or any(
                                 isinstance(result, RequestBudgetExceeded) for result in results
                             ):
@@ -464,7 +498,7 @@ class GraphScanEngine:
                             self.stop_reason = self.stop_reason or "diminishing returns"
                             break
                         frontier = sorted(state["next"], key=self._priority, reverse=True)
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, ScanCancelled):
                 raise
             except Exception as exc:  # noqa: BLE001 - terminate the stream cleanly
                 fatal_error = redact(str(exc))

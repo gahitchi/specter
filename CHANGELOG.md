@@ -84,6 +84,13 @@ They were not published releases; their changes are included in 0.11.0.
 - Redacted cross-platform diagnostics and non-destructive local/staging
   operational drills for migrations, backup restoration, functional replay,
   readiness probes, and immutable container digests.
+- Durable local research recovery with cooperative cancellation, bounded retry,
+  reload-safe activity replay, and explicit authorization for new and recurring
+  collection.
+- Privacy-preserving SHA-256 response receipts, response byte counts, and
+  persisted source lineage in evidence exports.
+- Plain-language saved-investigation monitoring controls, source/operator data
+  disclosures, and downloadable conclusion-first run reports.
 
 ### Fixed
 
@@ -110,6 +117,9 @@ They were not published releases; their changes are included in 0.11.0.
   such as observation timestamps.
 - Assigned the native Windows process a stable Specter application identity so
   the running window uses the product icon in the taskbar.
+- Kept local retries running without an application restart, retained activity
+  across the result transition, pruned cancelled jobs, and rejected cancellation
+  requests against terminal jobs.
 
 ### Changed
 

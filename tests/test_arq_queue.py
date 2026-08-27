@@ -64,7 +64,7 @@ async def test_arq_dispatch_failure_marks_durable_job_error(monkeypatch):
 async def test_arq_worker_updates_durable_status(monkeypatch):
     seen = []
 
-    async def fake_process(job):
+    async def fake_process(job, _queue=None):
         seen.append(job["payload"]["query"]["username"])
 
     monkeypatch.setattr(worker_mod, "process", fake_process)
@@ -79,7 +79,7 @@ async def test_arq_worker_updates_durable_status(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_arq_worker_requeues_failed_attempt(monkeypatch):
-    async def fail(_job):
+    async def fail(_job, _queue=None):
         raise RuntimeError("source unavailable")
 
     monkeypatch.setattr(worker_mod, "process", fail)

@@ -222,10 +222,25 @@ begin with several known identifiers. A conflicting automatic and explicit
 value is rejected rather than silently choosing one.
 
 The New investigation workspace renders collection as it happens. Request
-details include the public host, sanitized URL, method, HTTP status, and duration;
-credential-like query values are redacted before an activity leaves the engine.
-In production, `Run and save` reads the same graph state from the durable job so
-collection remains outside the web process.
+details include the public host, sanitized URL, method, HTTP status, duration,
+response size, and a SHA-256 response receipt; credential-like query values are
+redacted before an activity leaves the engine. The receipt can prove that two
+records came from the same capped response bytes without storing the page body
+in the report. It is not an identity fingerprint.
+
+Every dashboard investigation is saved as a durable background job. Closing or
+reloading the window does not cancel it: the Activity view reconnects to its
+stored progress, and an application restart resumes queued local work. Failed
+jobs retry within their configured limit. The operator can request cooperative
+cancellation after the current source check and can deliberately retry a failed
+or cancelled job. Production collection remains outside the web process.
+
+Starting or scheduling research requires an explicit authorization basis. A
+saved subject can reload its clues, but Specter clears the earlier confirmation
+before another run. Saved investigations also expose bounded six-hour, daily,
+and weekly monitoring presets; disabling a preset stops future scheduled
+requests. Completed runs can be reopened in the conclusion-first reader or
+downloaded as readable HTML, JSON, or CSV evidence records.
 
 The completed workspace presents a profile synthesis before the raw evidence.
 `provided` means operator input. `confirmed` means a current identity-bearing

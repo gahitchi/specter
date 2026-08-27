@@ -142,6 +142,7 @@ class Evidence(BaseModel):
     status: int
     final_url: str
     body_len: int
+    content_sha256: Optional[str] = None
     fingerprint: str  # simhash hex of normalized body
     title: Optional[str] = None
     contains_query: bool = False

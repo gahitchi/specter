@@ -8,6 +8,7 @@ budget apply to every outbound request from the scan engine.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import time
 import urllib.robotparser as robotparser
@@ -46,6 +47,7 @@ class RateLimitedClient:
         self._budget_lock = asyncio.Lock()
         self._limiter = limiter
         self._activity_callback = activity_callback
+        self._request_evidence: dict[str, dict[str, Any]] = {}
         self.request_count = 0
         self.budget_exhausted = False
 
@@ -70,6 +72,13 @@ class RateLimitedClient:
         if self._client is None:
             raise RuntimeError("RateLimitedClient must be used as an async context manager")
         return self._client
+
+    def latest_evidence(self, process_id: str | None) -> dict[str, Any] | None:
+        """Return the latest privacy-preserving response receipt for a process."""
+        if not process_id:
+            return None
+        receipt = self._request_evidence.get(process_id)
+        return dict(receipt) if receipt is not None else None
 
     @staticmethod
     def _validated_url(url: str) -> str:
@@ -220,6 +229,16 @@ class RateLimitedClient:
                     "truncated": truncated,
                 }
             )
+            process_id = ACTIVE_PROCESS_ID.get()
+            if process_id:
+                self._request_evidence[process_id] = {
+                    "status": result.status_code,
+                    "final_url": safe_display_url(str(result.request.url)),
+                    "elapsed_ms": round((time.monotonic() - started_at) * 1000),
+                    "content_bytes": len(result.content),
+                    "content_sha256": hashlib.sha256(result.content).hexdigest(),
+                    "truncated": truncated,
+                }
             return result
 
     async def _request_with_redirects(

@@ -327,7 +327,8 @@ class Job(Base):
     run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("runs.id"), index=True)
     kind: Mapped[str] = mapped_column(String(40), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)  # queued|leased|done|error
+    # queued | leased | cancel_requested | cancelled | done | error
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     leased_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     error: Mapped[Optional[str]] = mapped_column(Text)

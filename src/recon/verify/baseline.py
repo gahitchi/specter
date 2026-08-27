@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import secrets
 import string
+import hashlib
 from typing import Optional
 
 from ..config import SETTINGS, Settings
@@ -58,6 +59,9 @@ async def evidence_from_response(
         status=resp.status_code,
         final_url=str(resp.url),
         body_len=len(body),
+        content_sha256=hashlib.sha256(
+            resp.content[: settings.max_body_bytes]
+        ).hexdigest(),
         fingerprint=similarity.fingerprint_hex(body),
         title=title,
         contains_query=contains,

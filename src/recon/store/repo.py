@@ -296,6 +296,26 @@ def create_schedule(s: Session, target_id: int, cron: str) -> m.Schedule:
     return sc
 
 
+def set_schedule(s: Session, target_id: int, cron: str | None) -> m.Schedule | None:
+    """Replace a target's monitor schedule, or remove monitoring when cron is None."""
+    rows = list(s.execute(
+        select(m.Schedule).where(m.Schedule.target_id == target_id).order_by(m.Schedule.id)
+    ).scalars().all())
+    if cron is None:
+        for row in rows:
+            s.delete(row)
+        return None
+    schedule = rows[0] if rows else m.Schedule(target_id=target_id, cron=cron)
+    if not rows:
+        s.add(schedule)
+    schedule.cron = cron
+    schedule.enabled = True
+    for duplicate in rows[1:]:
+        s.delete(duplicate)
+    s.flush()
+    return schedule
+
+
 def list_schedules(s: Session, enabled_only: bool = True) -> list[m.Schedule]:
     stmt = select(m.Schedule)
     if enabled_only:

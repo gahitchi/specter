@@ -1,7 +1,8 @@
 const $ = (s) => document.querySelector(s);
 const order = { FOUND: 0, UNCERTAIN: 1, UNVERIFIABLE: 2, ERROR: 3, NOT_FOUND: 4 };
-let es = null;
-let liveScanFinished = false;
+let activeJobId = null;
+let retryJobId = null;
+const ACTIVE_JOB_KEY = "specter.active-job";
 let authState = { required: false, authenticated: true, csrf_token: null, user: null };
 const rawFetch = window.fetch.bind(window);
 window.fetch = async (input, init = {}) => {
@@ -32,10 +33,7 @@ function applyRole() {
   document.querySelectorAll("[data-role='admin']").forEach(el => el.hidden = role !== "admin");
   document.querySelectorAll("[data-role='review']").forEach(el => el.hidden = !["admin", "reviewer"].includes(role));
   document.querySelectorAll("[data-role='scan']").forEach(el => el.hidden = role === "reviewer");
-  const liveScanAvailable = role !== "reviewer" && authState.live_scans_enabled !== false;
-  $("#go").hidden = !liveScanAvailable;
-  $("#save").classList.toggle("primary-action", !liveScanAvailable);
-  $("#save").classList.toggle("secondary-action", liveScanAvailable);
+  $("#go").hidden = role === "reviewer";
   if (authState.required && authState.user) {
     $("#account").hidden = false;
     const accountName = authState.user.display_name || authState.user.username;
@@ -166,6 +164,7 @@ $("#login-form").addEventListener("submit", async (event) => {
   if (!response.ok) { showLogin(data.error || "Sign-in failed"); return; }
   await bootstrapAuth();
   event.currentTarget.reset();
+  await restoreActiveResearch();
 });
 
 $("#logout").addEventListener("click", async () => {
@@ -358,76 +357,7 @@ document.querySelectorAll("[data-verdict-filter]").forEach((button) => {
   button.addEventListener("click", () => selectVerdictFilter(button.dataset.verdictFilter));
 });
 
-// --- live SSE search -------------------------------------------------------
-$("#q").addEventListener("submit", (e) => {
-  e.preventDefault();
-  if (es) es.close();
-  const { params } = formParams();
-  if ([...params].length === 0) { setScanStatus("Add at least one identity clue.", "error"); return; }
-  resetResults();
-  beginResearchRoom();
-  setScanStage("activity");
-  $("#go").disabled = true;
-  setScanStatus("Researching…", "busy");
-  setLiveGraphStatus("Streaming", "busy");
-  liveScanFinished = false;
-  let observations = 0;
-  es = new EventSource("/api/search?" + params.toString());
-  es.onmessage = (msg) => {
-    let ev;
-    try { ev = JSON.parse(msg.data); }
-    catch (_) {
-      liveScanFinished = true;
-      setScanStatus("The live stream returned invalid data.", "error");
-      failLiveGraph("Invalid stream data");
-      desktopNotify("Investigation failed", "The live stream returned invalid data.", "error");
-      $("#go").disabled = false;
-      es.close();
-      return;
-    }
-    if (ev.type === "activity") { ingestLiveActivity(ev.activity); }
-    else if (ev.type === "intake") { renderIntake(ev.intake); }
-    else if (ev.type === "finding") {
-      addRow(ev.finding);
-      if (ev.finding.verdict === "FOUND")
-        setScanStatus(`Researching… ${++observations} positive source observation(s)`, "busy");
-    } else if (ev.type === "summary") { renderSummary(ev.summary); }
-    else if (ev.type === "reasoning") { renderReasoning(ev.reasoning, "#live-reasoning"); }
-    else if (ev.type === "done") {
-      liveScanFinished = true;
-      setScanStatus(
-        `Done — ${ev.hits} identity-supporting, ${ev.observed_hits || 0} observed from ${ev.total} checks.`,
-        "success",
-      );
-      finishLiveGraph(ev);
-      setScanStage("evidence");
-      desktopNotify(
-        "Investigation complete",
-        `${ev.hits} identity-supporting finding(s); ${ev.observed_hits || 0} positive source observation(s).`,
-      );
-      $("#go").disabled = false;
-      es.close();
-    } else if (ev.type === "error") {
-      liveScanFinished = true;
-      setScanStatus("Error: " + ev.message, "error");
-      failLiveGraph(ev.message);
-      desktopNotify("Investigation failed", ev.message, "error");
-      $("#go").disabled = false;
-      es.close();
-    }
-  };
-  es.onerror = () => {
-    if (liveScanFinished) return;
-    liveScanFinished = true;
-    setScanStatus("Live scan disconnected.", "error");
-    failLiveGraph("Stream disconnected");
-    desktopNotify("Investigation interrupted", "The live scan disconnected.", "warning");
-    $("#go").disabled = false;
-    es.close();
-  };
-});
-
-// --- persisted scan --------------------------------------------------------
+// --- durable research jobs -------------------------------------------------
 async function loadJobActivity(jobId, trace) {
   let hasMore = true;
   while (hasMore) {
@@ -446,43 +376,127 @@ async function loadJobActivity(jobId, trace) {
   }
 }
 
-async function waitForJob(jobId) {
+function setJobActions(status) {
+  const active = ["queued", "leased", "cancel_requested"].includes(status);
+  $("#job-cancel").hidden = !active || status === "cancel_requested";
+  $("#job-retry").hidden = !["error", "cancelled"].includes(status);
+  $("#go").disabled = active;
+}
+
+async function renderCompletedRun(job) {
+  const response = await fetch(`/api/runs/${job.run_id}/observations`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || data.error || "Saved evidence unavailable");
+  for (const observation of data.observations || []) addRow({
+    ...observation,
+    temporal: {
+      observed_at: observation.observed_at,
+      first_seen_at: observation.first_seen_at,
+      last_seen_at: observation.last_seen_at,
+      status: observation.temporal_status,
+    },
+  });
+  renderProfile((job.stats || {}).profile);
+  renderReasoning((job.stats || {}).reasoning, "#live-reasoning");
+  finishLiveGraph(job.stats || {});
+  setScanStage("evidence");
+}
+
+async function waitForJob(jobId, { restored = false } = {}) {
+  activeJobId = Number(jobId);
+  localStorage.setItem(ACTIVE_JOB_KEY, String(activeJobId));
   const trace = { cursor: 0, attempt: null };
+  let connectionFailures = 0;
+  if (restored) {
+    resetResults();
+    beginResearchRoom();
+    setScanStage("activity");
+    setScanStatus(`Reconnected to research #${jobId}.`, "busy");
+  }
   for (;;) {
-    const response = await fetch(`/api/jobs/${jobId}`);
-    const job = await response.json();
-    if (!response.ok) throw new Error(job.detail || job.error || "Job status unavailable");
+    let response;
+    let job;
+    try {
+      response = await fetch(`/api/jobs/${jobId}`);
+      job = await response.json();
+      if (!response.ok) throw new Error(job.detail || job.error || "Job status unavailable");
+      connectionFailures = 0;
+    } catch (error) {
+      connectionFailures += 1;
+      setScanStatus("Connection lost. The saved research is still running; reconnecting…", "busy");
+      setLiveGraphStatus("Reconnecting", "busy");
+      await new Promise(resolve => setTimeout(resolve, Math.min(5000, 500 * connectionFailures)));
+      continue;
+    }
+    setJobActions(job.status);
     if (trace.attempt !== job.attempts) {
       if (trace.attempt !== null) resetLiveGraph();
       trace.attempt = job.attempts;
       trace.cursor = 0;
     }
-    await loadJobActivity(jobId, trace);
-    if (job.status === "done") { finishLiveGraph(job.stats || {}); return job; }
+    try {
+      await loadJobActivity(jobId, trace);
+    } catch (_error) {
+      connectionFailures += 1;
+      setScanStatus("Connection lost. The saved research is still running; reconnecting…", "busy");
+      await new Promise(resolve => setTimeout(resolve, Math.min(5000, 500 * connectionFailures)));
+      continue;
+    }
+    if (job.status === "done") {
+      localStorage.removeItem(ACTIVE_JOB_KEY);
+      activeJobId = null;
+      retryJobId = null;
+      setJobActions("done");
+      await renderCompletedRun(job);
+      return job;
+    }
     if (job.status === "error") {
+      localStorage.removeItem(ACTIVE_JOB_KEY);
+      activeJobId = null;
+      retryJobId = job.id;
+      setJobActions("error");
       failLiveGraph(job.error || "Scan failed");
       throw new Error(job.error || "Scan failed");
     }
-    setLiveGraphStatus(job.status === "leased" ? `Attempt ${job.attempts}` : "Queued", "busy");
-    setScanStatus(`Queued scan #${jobId} · attempt ${job.attempts || 0}`, "busy");
+    if (job.status === "cancelled") {
+      localStorage.removeItem(ACTIVE_JOB_KEY);
+      activeJobId = null;
+      retryJobId = job.id;
+      setJobActions("cancelled");
+      setLiveGraphStatus("Cancelled", "warning");
+      setScanStatus(`Research #${jobId} was cancelled.`, "warning");
+      return job;
+    }
+    const cancelling = job.status === "cancel_requested";
+    setLiveGraphStatus(
+      cancelling ? "Stopping safely" : job.status === "leased" ? `Attempt ${job.attempts}` : "Queued",
+      "busy",
+    );
+    setScanStatus(
+      cancelling
+        ? `Stopping research #${jobId} after the current source check…`
+        : `Research #${jobId} is saved and running · attempt ${job.attempts || 0}`,
+      "busy",
+    );
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 }
 
-$("#save").addEventListener("click", async () => {
-  if (!$("#q").reportValidity()) return;
+async function startResearch() {
   const { obj } = formParams();
-  if (Object.keys(obj).length === 0) { setScanStatus("Add at least one identity clue.", "error"); return; }
-  liveScanFinished = true;
-  if (es) es.close();
+  if (Object.keys(obj).length === 0) {
+    setScanStatus("Add at least one identity clue.", "error");
+    return;
+  }
   resetResults();
+  retryJobId = null;
   beginResearchRoom();
   setScanStage("activity");
-  const button = $("#save");
+  const button = $("#go");
   button.disabled = true;
   try {
-    setScanStatus("Running and saving…", "busy");
-    setLiveGraphStatus("Running", "busy");
+    setScanStatus("Saving and starting research…", "busy");
+    setLiveGraphStatus("Starting", "busy");
     const r = await fetch("/api/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) });
     const d = await r.json();
     if (!r.ok) {
@@ -491,35 +505,66 @@ $("#save").addEventListener("click", async () => {
       desktopNotify("Investigation failed", message, "error");
       return;
     }
-    if (r.status === 202) {
-      renderIntake(d.intake);
-      setScanStatus(`Queued scan #${d.job_id}`, "busy");
-      const job = await waitForJob(d.job_id);
+    renderIntake(d.intake);
+    setScanStatus(`Research #${d.job_id} saved. It will continue if this window closes.`, "busy");
+    const job = await waitForJob(d.job_id);
+    if (job.status === "done") {
       const hits = (job.stats || {}).hits || 0;
       const observed = (job.stats || {}).observed_hits || 0;
       setScanStatus(`Saved run #${job.run_id}: ${hits} identity-supporting, ${observed} observed.`, "success");
-      desktopNotify("Investigation saved", `Run #${job.run_id}: ${hits} identity-supporting finding(s).`);
-      renderProfile((job.stats || {}).profile);
-      renderReasoning((job.stats || {}).reasoning, "#live-reasoning");
-      setScanStage("evidence");
-      return;
+      desktopNotify("Investigation complete", `Run #${job.run_id}: ${hits} identity-supporting finding(s).`);
     }
-    renderIntake(d.intake);
-    setScanStatus(`Saved run #${d.run_id}: ${d.hits} identity-supporting, ${d.observed_hits || 0} observed, ${d.summary.identities} identities.`, "success");
-    desktopNotify("Investigation saved", `Run #${d.run_id}: ${d.hits} identity-supporting finding(s).`);
-    for (const activity of d.activity || []) ingestLiveActivity(activity);
-    finishLiveGraph(d);
-    renderSummary(d.summary);
-    renderReasoning(d.reasoning, "#live-reasoning");
-    setScanStage("evidence");
   } catch (error) {
     setScanStatus(`Scan failed: ${error.message}`, "error");
     failLiveGraph(error.message);
     desktopNotify("Investigation failed", error.message, "error");
-  } finally {
-    button.disabled = false;
-  }
+  } finally { if (!activeJobId) button.disabled = false; }
+}
+
+$("#q").addEventListener("submit", async event => {
+  event.preventDefault();
+  if (!event.currentTarget.reportValidity() || activeJobId) return;
+  await startResearch();
 });
+
+$("#job-cancel").addEventListener("click", async () => {
+  if (!activeJobId || !window.confirm("Stop this research after its current source check?")) return;
+  const response = await fetch(`/api/jobs/${activeJobId}/cancel`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+  const data = await response.json();
+  if (!response.ok) setScanStatus(data.detail || data.error || "Could not cancel research.", "error");
+  else { setJobActions(data.status); setScanStatus("Cancellation requested. Finishing the current source check…", "busy"); }
+});
+
+$("#job-retry").addEventListener("click", async () => {
+  if (!retryJobId) return;
+  const jobId = retryJobId;
+  const response = await fetch(`/api/jobs/${jobId}/retry`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+  const data = await response.json();
+  if (!response.ok) { setScanStatus(data.detail || data.error || "Could not retry research.", "error"); return; }
+  resetResults();
+  beginResearchRoom();
+  setScanStage("activity");
+  retryJobId = null;
+  try { await waitForJob(jobId); }
+  catch (error) { setScanStatus(`Research failed: ${error.message}`, "error"); }
+});
+
+async function restoreActiveResearch() {
+  let jobId = Number(localStorage.getItem(ACTIVE_JOB_KEY) || 0);
+  if (!jobId) {
+    const response = await fetch("/api/jobs?active=true&limit=1");
+    if (response.ok) jobId = Number(((await response.json())[0] || {}).id || 0);
+  }
+  if (!jobId) return;
+  try { await waitForJob(jobId, { restored: true }); }
+  catch (error) {
+    setScanStatus(`Saved research needs attention: ${error.message}`, "error");
+  }
+}
 
 function breakdownHtml(bd) {
   if (!bd || !bd.contributions) return "";
@@ -540,8 +585,12 @@ function traceHtml(t) {
   const kv = [];
   if (t.site_rule) kv.push(`rule: ${esc(t.site_rule.name)} (${esc(t.site_rule.error_type)})`);
   if (t.request) kv.push(`request: HTTP ${t.request.status} → ${esc(t.request.final_url || "")}`
-    + (t.request.elapsed_ms ? ` (${t.request.elapsed_ms}ms)` : ""));
-  kv.push("baseline: " + (t.baseline ? `HTTP ${t.baseline.status}, fp ${esc((t.baseline.fingerprint || "").slice(0, 8))}` : "none"));
+    + (t.request.elapsed_ms ? ` (${t.request.elapsed_ms}ms)` : "")
+    + (t.request.content_sha256 ? ` · response receipt ${esc(t.request.content_sha256.slice(0, 12))}` : "")
+    + (Number.isFinite(t.request.content_bytes) ? ` · ${t.request.content_bytes} bytes` : ""));
+  kv.push("absent-page comparison: " + (t.baseline
+    ? `HTTP ${t.baseline.status}, page signature ${esc((t.baseline.fingerprint || "").slice(0, 8))} (comparison only)`
+    : "not available"));
   if (t.thresholds) kv.push(`thresholds: FOUND≥${t.thresholds.found_confidence}, UNCERTAIN≥${t.thresholds.uncertain_confidence}`);
   kv.push(`dataset ${esc((t.dataset_sha256 || "").slice(0, 8))} · tool ${esc(t.tool_version)}`
     + (t.deterministic ? " · deterministic" : ""));
@@ -563,13 +612,26 @@ function addRow(f) {
     ERROR: "Error", NOT_FOUND: "Not observed",
   }[f.verdict] || String(f.verdict || "Result");
   const confidence = Math.round(Number(f.confidence || 0) * 100);
+  const temporal = f.temporal || {};
+  const observedAt = temporal.observed_at || f.observed_at;
+  const evidenceClass = typeof f.origin === "object"
+    ? f.origin.evidence_class : f.evidence_class;
+  const lineage = typeof f.origin === "object"
+    ? f.origin.independence_key : f.independence_key;
+  const evidenceMeta = [
+    evidenceClass ? readableToken(evidenceClass) : null,
+    observedAt ? `observed ${new Date(observedAt).toLocaleString()}` : null,
+    temporal.status && temporal.status !== "unknown" ? readableToken(temporal.status) : null,
+    lineage ? `lineage ${lineage}` : null,
+  ].filter(Boolean).map(value => `<span>${esc(value)}</span>`).join("");
   item.dataset.search = [f.source, f.label, f.url, ...(f.reasons || [])]
     .filter(Boolean).join(" ").toLocaleLowerCase();
   item.innerHTML = `<div class="evidence-item-main"><span class="v ${esc(f.verdict)}">${esc(verdictLabel)}</span>`
     + `<div class="evidence-identity"><h4>${label}</h4><span>${esc(source)}</span></div>`
-    + `<div class="evidence-strength"><strong>${confidence}%</strong><span>source confidence</span></div></div>`
+    + `<div class="evidence-strength" title="Confidence in this observation, not proof of identity"><strong>${confidence}%</strong><span>observation confidence</span></div></div>`
     + `<details class="evidence-explanation"><summary>Why Specter classified this</summary>`
     + `<div class="evidence-explanation-body">${reasons ? `<ul>${reasons}</ul>` : "<p>No explanation was recorded.</p>"}`
+    + `${evidenceMeta ? `<div class="evidence-metadata">${evidenceMeta}</div>` : ""}`
     + `${breakdownHtml(f.breakdown)}${traceHtml(f.trace)}</div></details>`;
   const root = $("#results");
   const rows = [...root.children];
@@ -923,11 +985,141 @@ async function table(target, url, cols, mapRow) {
   $(target).innerHTML = h + "</tbody></table>";
 }
 
-const loadTargets = () => table("#targets", "/api/targets", ["id", "label", "watch", "query"],
-  (t) => [t.id, esc(t.label||""), t.watchlist ? "✓" : "", esc(JSON.stringify(t.query))]);
+function queryChips(query) {
+  return Object.entries(query || {}).map(([kind, value]) =>
+    `<span class="investigation-clue"><small>${esc(identityLabels[kind] || kind)}</small>${esc(value)}</span>`
+  ).join("");
+}
 
-const loadRuns = () => table("#runs", "/api/runs", ["run", "target", "status", "stats", "provenance"],
-  (r) => [r.id, r.target_id, r.status, esc(JSON.stringify(r.stats)), provenanceHtml(r.provenance)]);
+function preloadTarget(target) {
+  const form = $("#q");
+  form.reset();
+  for (const [kind, value] of Object.entries(target.query || {})) {
+    const input = form.elements.namedItem(kind);
+    if (input) input.value = value;
+  }
+  const additional = form.querySelector(".additional-clues");
+  additional.open = ["url", "domain", "ip_address"].some((kind) => target.query?.[kind]);
+  updateClueSummary();
+  activateTab(document.querySelector('#tabs button[data-tab="search"]'));
+  setScanStage("start");
+  setScanStatus("Saved clues loaded. Confirm the authorization basis before starting new research.");
+  form.querySelector('[name="authorization_basis"]').focus();
+}
+
+async function saveMonitoring(targetId, row) {
+  const cadence = row.querySelector("[data-monitor-cadence]").value;
+  const status = row.querySelector("[data-monitor-status]");
+  if (cadence === "custom") {
+    status.textContent = "Choose one of the application presets to replace this custom schedule.";
+    return;
+  }
+  const enabling = cadence !== "off";
+  const basis = row.querySelector("[data-monitor-basis]").value;
+  if (enabling && !basis) {
+    status.textContent = "Select the authorization basis for recurring research.";
+    return;
+  }
+  if (enabling && !window.confirm(
+    "Enable recurring public-source requests for this saved subject? You can turn them off here at any time."
+  )) return;
+  status.textContent = "Saving…";
+  const response = await fetch(`/api/targets/${targetId}/monitor`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      cadence,
+      authorized: enabling,
+      authorization_basis: enabling ? basis : null,
+    }),
+  });
+  const data = await response.json();
+  status.textContent = response.ok
+    ? (enabling ? "Monitoring enabled. Changes will appear in the timeline." : "Monitoring turned off.")
+    : (data.detail || data.error || "Monitoring could not be changed.");
+  if (response.ok) loadTargets();
+}
+
+async function loadTargets() {
+  const rows = await (await fetch("/api/targets")).json();
+  const root = $("#targets");
+  if (!rows.length) {
+    root.innerHTML = "<div class='empty-state compact-empty'><strong>No saved subjects</strong><span>Completed research will appear here automatically.</span></div>";
+    return;
+  }
+  const canScan = ((authState.user || {}).role || "admin") !== "reviewer";
+  root.innerHTML = `<div class="investigation-list">${rows.map((target) => {
+    const cadence = target.monitoring?.cadence || "off";
+    const researchActions = canScan ? `<button type="button" class="secondary-action" data-repeat-target="${target.id}">Research again</button>` : "";
+    const monitor = canScan ? `<details class="monitor-curtain"><summary>Change monitoring <span>${cadence === "off" ? "Off" : esc(cadence.replaceAll("_", " "))}</span></summary>`
+      + `<div class="monitor-controls"><label><span>Frequency</span><select data-monitor-cadence>`
+      + `<option value="off"${cadence === "off" ? " selected" : ""}>Off</option>`
+      + `<option value="every_6_hours"${cadence === "every_6_hours" ? " selected" : ""}>Every 6 hours</option>`
+      + `<option value="daily"${cadence === "daily" ? " selected" : ""}>Daily at 07:00</option>`
+      + `<option value="weekly"${cadence === "weekly" ? " selected" : ""}>Weekly on Monday</option>`
+      + (cadence === "custom" ? `<option value="custom" selected>Custom schedule</option>` : "")
+      + `</select></label><label><span>Authorization basis</span><select data-monitor-basis><option value="">Select basis</option>`
+      + `<option value="self_owned">My own information or assets</option><option value="documented_authorization">Documented permission</option>`
+      + `<option value="legitimate_public_interest">Legitimate public-interest research</option></select></label>`
+      + `<button type="button" class="primary-action" data-save-monitor="${target.id}">Apply</button>`
+      + `<span class="status-text" data-monitor-status role="status"></span></div></details>` : "";
+    return `<article class="investigation-item" data-target-row="${target.id}"><header><div><span class="eyebrow">Saved subject #${target.id}</span>`
+      + `<h4>${esc(target.label || "Untitled subject")}</h4></div>${researchActions}</header>`
+      + `<div class="investigation-clues">${queryChips(target.query)}</div>${monitor}</article>`;
+  }).join("")}</div>`;
+  root.querySelectorAll("[data-repeat-target]").forEach((button) => {
+    const target = rows.find((item) => item.id === Number(button.dataset.repeatTarget));
+    button.addEventListener("click", () => preloadTarget(target));
+  });
+  root.querySelectorAll("[data-save-monitor]").forEach((button) => {
+    button.addEventListener("click", () => saveMonitoring(
+      Number(button.dataset.saveMonitor), button.closest("[data-target-row]")
+    ));
+  });
+}
+
+async function openSavedRun(runId) {
+  const [profileResponse, reasoningResponse] = await Promise.all([
+    fetch(`/api/runs/${runId}/profile`),
+    fetch(`/api/runs/${runId}/reasoning`),
+  ]);
+  if (!profileResponse.ok || !reasoningResponse.ok) return;
+  const [profile, reasoning] = await Promise.all([
+    profileResponse.json(), reasoningResponse.json(),
+  ]);
+  resetResults();
+  activateTab(document.querySelector('#tabs button[data-tab="search"]'));
+  await renderCompletedRun({
+    run_id: runId,
+    stats: { profile: profile.profile, reasoning: reasoning.reasoning },
+  });
+  setScanStatus(`Showing saved research run #${runId}.`, "success");
+}
+
+async function loadRuns() {
+  const rows = await (await fetch("/api/runs")).json();
+  const root = $("#runs");
+  if (!rows.length) {
+    root.innerHTML = "<div class='empty-state compact-empty'><strong>No research history</strong><span>Finished and interrupted runs will appear here.</span></div>";
+    return;
+  }
+  root.innerHTML = "<table><thead><tr><th>Research</th><th>Started</th><th>Outcome</th><th>Evidence</th><th>Open or export</th></tr></thead><tbody>"
+    + rows.map((run) => {
+      const stats = run.stats || {};
+      const evidence = `${stats.hits || 0} identity-supporting · ${stats.observed_hits || 0} observed · ${stats.total || 0} checks`;
+      const actions = run.status === "done"
+        ? `<div class="run-actions"><button type="button" class="secondary-action" data-open-run="${run.id}">Read result</button>`
+          + `<a class="button-link" href="/api/runs/${run.id}/report/html" download>Readable report</a>`
+          + `<details><summary>Data formats</summary><a href="/api/runs/${run.id}/report/json" download>JSON</a><a href="/api/runs/${run.id}/report/csv" download>CSV</a></details></div>`
+        : `<span class="tag">${esc(stats.error || "No completed report")}</span>`;
+      return `<tr><td><b>#${run.id} · ${esc(run.target_label || `subject #${run.target_id}`)}</b></td>`
+        + `<td>${esc(run.started_at.replace("T", " ").slice(0, 16))}</td><td>${badge(run.status)}</td>`
+        + `<td>${esc(evidence)}</td><td>${actions}</td></tr>`;
+    }).join("") + "</tbody></table>";
+  root.querySelectorAll("[data-open-run]").forEach((button) => {
+    button.addEventListener("click", () => openSavedRun(Number(button.dataset.openRun)));
+  });
+}
 
 function provenanceHtml(p) {
   if (!p) return "<span class='tag'>—</span>";
@@ -947,16 +1139,24 @@ function provenanceHtml(p) {
 const loadChanges = () => table("#changes", "/api/changes", ["when","kind","source","label","detail"],
   (c) => [c.created_at.replace("T"," ").slice(0,16), badge(c.kind), esc(c.source||""), esc(c.label||""), esc(JSON.stringify(c.detail))]);
 
-const loadSources = () => table("#sources", "/api/sources",
-  ["source","interaction","data sent","reliability","runtime","canary"],
-  (s) => {
-    const c = s.contract || {};
-    const check = s.latest_check
-      ? `${badge(s.latest_check.status)}<br><small>${esc(s.latest_check.created_at.slice(0,10))}</small>`
-      : `<span class="tag">not run</span>`;
-    return [esc(s.name), esc(c.interaction||""), esc((c.data_sent||[]).join(", ")||"none"),
-            bar(s.reliability), `${s.successes} ok / ${s.failures} fail · ${badge(s.breaker_state)}`, check];
-  });
+async function loadSources() {
+  const rows = await (await fetch("/api/sources")).json();
+  const root = $("#sources");
+  root.innerHTML = `<div class="source-list">${rows.map((source) => {
+    const contract = source.contract || {};
+    const check = source.latest_check
+      ? `${badge(source.latest_check.status)} <small>${esc(source.latest_check.created_at.slice(0, 10))}</small>`
+      : `<span class="tag">Not checked with a canary</span>`;
+    const sent = (contract.data_sent || []).length ? contract.data_sent.join(", ") : "Nothing leaves this device";
+    return `<article class="source-item"><header><div><span class="eyebrow">${esc(contract.interaction || "source")}</span>`
+      + `<h4>${esc(source.name)}</h4><p>Operated by ${esc(contract.operator || "unknown operator")}</p></div>${badge(source.enabled ? "enabled" : "disabled")}</header>`
+      + `<div class="source-facts"><span><small>Sends</small>${esc(sent)}</span><span><small>Can establish</small>${esc(contract.evidence || "Not documented")}</span>`
+      + `<span><small>Observed reliability</small>${bar(source.reliability)}</span><span><small>Current state</small>${source.successes} successful / ${source.failures} failed · ${badge(source.breaker_state)}</span></div>`
+      + `<details class="source-terms"><summary>Limits, terms, and health checks</summary><div><p><b>Request limits:</b> ${esc(contract.rate_policy || "Not documented")}</p>`
+      + `<p><b>Applicable policies:</b> ${esc(contract.terms_scope || "Not documented")}</p><p><b>Contract reviewed:</b> ${esc(contract.reviewed_on || "unknown")}</p>`
+      + `<p><b>Latest controlled check:</b> ${check}</p></div></details></article>`;
+  }).join("")}</div>`;
+}
 
 async function loadReview() {
   let run = $("#review-run").value.trim();
@@ -2546,11 +2746,12 @@ $("#pair-review-form").addEventListener("submit", async event => {
   if (response.ok) event.currentTarget.reset();
 });
 
-bootstrapAuth().then(() => {
+bootstrapAuth().then(async () => {
   const requestedTab = location.hash.slice(1);
   const requestedButton = document.querySelector(`#tabs button[data-tab="${CSS.escape(requestedTab)}"]`);
   const initialTab = (requestedButton && !requestedButton.hidden)
     ? requestedButton
     : document.querySelector("#tabs button.active");
   if (initialTab && !initialTab.classList.contains("active")) activateTab(initialTab, false);
+  await restoreActiveResearch();
 }).catch(() => showLogin("Could not reach the server"));

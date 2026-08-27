@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -40,7 +40,6 @@ from .auth import (
     revoke_session,
 )
 from .config import SETTINGS, env_value
-from .evidence import confirmation_satisfied
 from .identifiers import IdentifierKind, resolve_query
 from .keys import KNOWN_KEYS, VAULT
 from .models import Query
@@ -52,6 +51,11 @@ from .store import get_db, repo
 
 _OPTIONAL_KEY_USERS = {"github": ["github"], "hibp": ["breach"]}
 _IDENTIFIER_MAX = 320
+_MONITOR_CRONS = {
+    "every_6_hours": "0 */6 * * *",
+    "daily": "0 7 * * *",
+    "weekly": "0 7 * * 1",
+}
 _SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
@@ -82,6 +86,12 @@ class ScanPayload(BaseModel):
     ip_address: str | None = Field(default=None, max_length=_IDENTIFIER_MAX)
     label: str | None = Field(default=None, max_length=200)
     watchlist: bool = False
+    authorized: bool = False
+    authorization_basis: Literal[
+        "self_owned",
+        "documented_authorization",
+        "legitimate_public_interest",
+    ] | None = None
 
     def query(self) -> Query:
         return self.resolve()[0]
@@ -98,6 +108,18 @@ class ScanPayload(BaseModel):
             default_phone_region=SETTINGS.phone_default_region,
             **values,
         )
+
+
+class MonitorPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cadence: Literal["off", "every_6_hours", "daily", "weekly"]
+    authorized: bool = False
+    authorization_basis: Literal[
+        "self_owned",
+        "documented_authorization",
+        "legitimate_public_interest",
+    ] | None = None
 
 
 class KeyPayload(BaseModel):
@@ -246,6 +268,53 @@ def _same_origin(request: Request, origin: str) -> bool:
 PACKAGE_DIR = Path(__file__).resolve().parent
 WEB_DIR = PACKAGE_DIR / "web"
 ICON_PATH = PACKAGE_DIR / "assets" / "specter.png"
+_LOCAL_JOB_TASKS: dict[int, asyncio.Task] = {}
+
+
+def _queue():
+    if SETTINGS.queue_backend == "local":
+        from .jobs.base import LocalQueue
+
+        return LocalQueue(SETTINGS)
+    from .jobs import get_queue
+
+    return get_queue()
+
+
+async def _run_local_job(job_id: int) -> None:
+    from .engine import ScanCancelled
+    from .jobs.worker import process
+
+    queue = _queue()
+    while True:
+        job = await asyncio.to_thread(queue.claim, job_id)
+        if job is None:
+            return
+        try:
+            run_id = await process(job, queue, scan_fn=scan)
+            await asyncio.to_thread(queue.complete, job_id, run_id)
+            return
+        except ScanCancelled:
+            await asyncio.to_thread(queue.mark_cancelled, job_id)
+            return
+        except asyncio.CancelledError:
+            await asyncio.to_thread(queue.release, job_id)
+            raise
+        except Exception as exc:  # noqa: BLE001 - isolate one background job
+            from .keys import redact
+
+            await asyncio.to_thread(queue.fail, job_id, redact(str(exc)))
+            if await asyncio.to_thread(queue.status, job_id) != "queued":
+                return
+            await asyncio.sleep(0.25)
+
+
+def _start_local_job(job_id: int) -> None:
+    if SETTINGS.queue_backend != "local" or job_id in _LOCAL_JOB_TASKS:
+        return
+    task = asyncio.create_task(_run_local_job(job_id), name=f"specter-job-{job_id}")
+    _LOCAL_JOB_TASKS[job_id] = task
+    task.add_done_callback(lambda _task: _LOCAL_JOB_TASKS.pop(job_id, None))
 
 
 @asynccontextmanager
@@ -257,9 +326,19 @@ async def _lifespan(_app):
 
         with get_db().session() as session:
             prune_sessions(session)
+    if SETTINGS.queue_backend == "local":
+        queue = _queue()
+        for job_id in await asyncio.to_thread(queue.recoverable_ids):
+            _start_local_job(job_id)
     try:
         yield
     finally:
+        tasks = list(_LOCAL_JOB_TASKS.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        _LOCAL_JOB_TASKS.clear()
         from .store.db import close_db
 
         close_db()
@@ -669,6 +748,12 @@ async def search(
     name: str | None = None,
     url: str | None = None,
     ip_address: str | None = None,
+    authorized: bool = False,
+    authorization_basis: Literal[
+        "self_owned",
+        "documented_authorization",
+        "legitimate_public_interest",
+    ] | None = None,
 ) -> StreamingResponse:
     principal = _principal(request)
     _require(principal, "scan")
@@ -676,6 +761,11 @@ async def search(
         raise HTTPException(
             status_code=409,
             detail="live scans are disabled; submit a durable scan instead",
+        )
+    if not authorized or authorization_basis is None:
+        raise HTTPException(
+            status_code=422,
+            detail="confirm authorization and select its basis before researching",
         )
     query, intake = _resolve_query_or_422(
         subject,
@@ -705,85 +795,90 @@ async def search(
 async def api_scan(request: Request, payload: ScanPayload) -> JSONResponse:
     principal = _principal(request)
     _require(principal, "scan")
+    if not payload.authorized or payload.authorization_basis is None:
+        raise HTTPException(
+            status_code=422,
+            detail="confirm authorization and select its basis before researching",
+        )
     try:
         query, intake = payload.resolve()
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if SETTINGS.queue_backend == "arq":
-        from .governance import add_audit_event
-        from .jobs import get_queue
+    from .governance import add_audit_event
 
-        job_payload = {
-            "query": query.model_dump(exclude_none=True),
-            "intake": intake,
-            "label": payload.label,
-            "watchlist": payload.watchlist,
-        }
-        job_id = await asyncio.to_thread(
-            get_queue().enqueue,
-            "scan",
-            job_payload,
-            owner_id=principal.user_id,
-        )
-        with get_db().session() as session:
-            add_audit_event(
-                session,
-                "scan.queued",
-                "job",
-                job_id,
-                actor=principal.username,
-                actor_user_id=principal.user_id,
-            )
-        return JSONResponse(
-            {"job_id": job_id, "status": "queued", "intake": intake},
-            status_code=202,
-            headers={"Location": f"/api/jobs/{job_id}"},
-        )
-    activity_nodes: dict[str, dict] = {}
-
-    async def capture_activity(activity: dict) -> None:
-        activity_nodes[str(activity["id"])] = dict(activity)
-
-    result = await scan(
-        query,
-        label=payload.label,
-        watchlist=payload.watchlist,
-        owner_id=principal.user_id,
-        activity_callback=capture_activity,
-        intake=intake,
-    )
-    findings = result["findings"]
-    profile_counts = (result["summary"].get("profile") or {}).get("counts") or {}
-    confirmed_hits = profile_counts.get("confirmed_findings")
-    if confirmed_hits is None:
-        confirmed_hits = sum(
-            confirmation_satisfied(finding, findings, query) for finding in findings
-        )
-    return JSONResponse({
-        "run_id": result["run_id"],
-        "target_id": result["target_id"],
-        "summary": result["summary"],
-        "profile": result["summary"].get("profile"),
+    job_payload = {
+        "query": query.model_dump(exclude_none=True),
         "intake": intake,
-        "reasoning": result["reasoning"],
-        "changes": result["changes"],
-        "hits": confirmed_hits,
-        "observed_hits": sum(1 for finding in findings if finding.is_hit),
-        "activity": sorted(
-            activity_nodes.values(), key=lambda item: int(item.get("sequence") or 0)
-        ),
-    })
+        "label": payload.label,
+        "watchlist": payload.watchlist,
+        "authorization_basis": payload.authorization_basis,
+    }
+    queue = _queue()
+    job_id = await asyncio.to_thread(
+        queue.enqueue,
+        "scan",
+        job_payload,
+        owner_id=principal.user_id,
+    )
+    _start_local_job(job_id)
+    with get_db().session() as session:
+        add_audit_event(
+            session,
+            "scan.queued",
+            "job",
+            job_id,
+            actor=principal.username,
+            actor_user_id=principal.user_id,
+            detail={"authorization_basis": payload.authorization_basis},
+        )
+    return JSONResponse(
+        {"job_id": job_id, "status": "queued", "intake": intake},
+        status_code=202,
+        headers={"Location": f"/api/jobs/{job_id}"},
+    )
+
+
+def _can_access_job(session, principal: Principal, job_id: int):
+    job = session.get(repo.m.Job, job_id)
+    if job is None or (
+        not principal.can("read_all") and job.owner_id != principal.user_id
+    ):
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    return job
+
+
+@app.get("/api/jobs")
+async def api_jobs(request: Request, active: bool = False, limit: int = 25) -> JSONResponse:
+    from sqlalchemy import select
+
+    principal = _principal(request)
+    limit = max(1, min(limit, 100))
+    with get_db().session() as session:
+        statement = select(repo.m.Job)
+        if not principal.can("read_all"):
+            statement = statement.where(repo.m.Job.owner_id == principal.user_id)
+        if active:
+            statement = statement.where(repo.m.Job.status.in_((
+                "queued", "leased", "cancel_requested",
+            )))
+        rows = list(session.execute(
+            statement.order_by(repo.m.Job.id.desc()).limit(limit)
+        ).scalars())
+        return JSONResponse([
+            {
+                **_row(job, ("id", "status", "attempts", "run_id", "target_id")),
+                "error": job.error if job.status == "error" else None,
+                "created_at": job.created_at.isoformat(),
+            }
+            for job in rows
+        ])
 
 
 @app.get("/api/jobs/{job_id}")
 async def api_job(request: Request, job_id: int) -> JSONResponse:
     principal = _principal(request)
     with get_db().session() as session:
-        job = session.get(repo.m.Job, job_id)
-        if job is None or (
-            not principal.can("read_all") and job.owner_id != principal.user_id
-        ):
-            raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+        job = _can_access_job(session, principal, job_id)
         result = {
             **_row(job, ("id", "status", "attempts", "run_id", "target_id")),
             "error": job.error if job.status == "error" else None,
@@ -797,6 +892,52 @@ async def api_job(request: Request, job_id: int) -> JSONResponse:
         return JSONResponse(result)
 
 
+@app.post("/api/jobs/{job_id}/cancel")
+async def api_cancel_job(request: Request, job_id: int) -> JSONResponse:
+    from .governance import add_audit_event
+
+    principal = _principal(request)
+    _require(principal, "scan")
+    with get_db().session() as session:
+        _can_access_job(session, principal, job_id)
+    status = await asyncio.to_thread(_queue().request_cancel, job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    if status not in {"cancel_requested", "cancelled"}:
+        raise HTTPException(status_code=409, detail=f"job cannot be cancelled while {status}")
+    with get_db().session() as session:
+        add_audit_event(
+            session, "job.cancel_requested", "job", job_id,
+            actor=principal.username, actor_user_id=principal.user_id,
+            detail={"status": status},
+        )
+    return JSONResponse({"job_id": job_id, "status": status})
+
+
+@app.post("/api/jobs/{job_id}/retry")
+async def api_retry_job(request: Request, job_id: int) -> JSONResponse:
+    from .governance import add_audit_event
+
+    principal = _principal(request)
+    _require(principal, "scan")
+    with get_db().session() as session:
+        job = _can_access_job(session, principal, job_id)
+        previous = job.status
+    status = await asyncio.to_thread(_queue().retry, job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    if status != "queued" or previous in {"queued", "leased", "cancel_requested"}:
+        raise HTTPException(status_code=409, detail=f"job cannot be retried while {previous}")
+    _start_local_job(job_id)
+    with get_db().session() as session:
+        add_audit_event(
+            session, "job.retried", "job", job_id,
+            actor=principal.username, actor_user_id=principal.user_id,
+            detail={"previous_status": previous},
+        )
+    return JSONResponse({"job_id": job_id, "status": status}, status_code=202)
+
+
 @app.get("/api/jobs/{job_id}/activity")
 async def api_job_activity(
     request: Request, job_id: int, after: int = 0, limit: int = 500
@@ -805,11 +946,7 @@ async def api_job_activity(
     after = max(0, after)
     limit = max(1, min(limit, 500))
     with get_db().session() as session:
-        job = session.get(repo.m.Job, job_id)
-        if job is None or (
-            not principal.can("read_all") and job.owner_id != principal.user_id
-        ):
-            raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+        job = _can_access_job(session, principal, job_id)
         rows = repo.list_job_activity(
             session, job_id, after=after, limit=limit + 1
         )
@@ -838,14 +975,72 @@ async def api_targets(request: Request, watchlist: bool = False) -> JSONResponse
             owner_id=principal.user_id,
             include_all=principal.can("read_all"),
         )
+        target_ids = {target.id for target in rows}
+        schedules = {
+            schedule.target_id: schedule
+            for schedule in repo.list_schedules(session, enabled_only=False)
+            if schedule.target_id in target_ids and schedule.enabled
+        }
+        cadence_by_cron = {cron: cadence for cadence, cron in _MONITOR_CRONS.items()}
         return JSONResponse([
             {
                 **_row(target, ("id", "label", "watchlist")),
                 "query": target.query,
                 "created_at": target.created_at.isoformat(),
+                "monitoring": (
+                    {
+                        "cadence": cadence_by_cron.get(
+                            schedules[target.id].cron, "custom"
+                        ),
+                        "last_run_at": (
+                            schedules[target.id].last_run_at.isoformat()
+                            if schedules[target.id].last_run_at else None
+                        ),
+                    }
+                    if target.id in schedules else {"cadence": "off", "last_run_at": None}
+                ),
             }
             for target in rows
         ])
+
+
+@app.post("/api/targets/{target_id}/monitor")
+async def api_target_monitor(
+    request: Request, target_id: int, payload: MonitorPayload
+) -> JSONResponse:
+    principal = _principal(request)
+    _require(principal, "scan")
+    enabling = payload.cadence != "off"
+    if enabling and (not payload.authorized or payload.authorization_basis is None):
+        raise HTTPException(
+            status_code=422,
+            detail="Confirm an authorization basis before enabling recurring research.",
+        )
+    from .governance import add_audit_event
+
+    with get_db().session() as session:
+        target = _can_access_target(session, principal, target_id, write=True)
+        schedule = repo.set_schedule(
+            session, target_id, _MONITOR_CRONS.get(payload.cadence)
+        )
+        target.watchlist = schedule is not None
+        add_audit_event(
+            session,
+            "target.monitoring_changed",
+            "target",
+            target_id,
+            actor=principal.username,
+            actor_user_id=principal.user_id,
+            detail={
+                "cadence": payload.cadence,
+                "authorization_basis": payload.authorization_basis if enabling else None,
+            },
+        )
+        return JSONResponse({
+            "target_id": target_id,
+            "cadence": payload.cadence,
+            "enabled": schedule is not None,
+        })
 
 
 @app.get("/api/runs")
@@ -861,6 +1056,7 @@ async def api_runs(request: Request, target_id: int | None = None) -> JSONRespon
         return JSONResponse([
             {
                 **_row(run, ("id", "target_id", "status")),
+                "target_label": session.get(repo.m.Target, run.target_id).label,
                 "stats": _compact_run_stats(run.stats),
                 "provenance": run.provenance,
                 "started_at": run.started_at.isoformat(),
@@ -868,6 +1064,41 @@ async def api_runs(request: Request, target_id: int | None = None) -> JSONRespon
             }
             for run in rows
         ])
+
+
+@app.get("/api/runs/{run_id}/report/{report_format}")
+async def api_run_report(
+    request: Request, run_id: int, report_format: Literal["json", "csv", "html"]
+) -> Response:
+    from . import reporting
+
+    with get_db().session() as session:
+        run = _can_access_run(session, _principal(request), run_id)
+        target = session.get(repo.m.Target, run.target_id)
+        query = Query.model_validate(target.query)
+        findings = [
+            reporting.finding_from_observation(observation)
+            for observation in repo.observations_for_run(session, run_id)
+        ]
+        summary = run.stats or {}
+    if report_format == "json":
+        content = reporting.to_json(query, findings, summary)
+        media_type = "application/json"
+    elif report_format == "csv":
+        content = reporting.to_csv(findings)
+        media_type = "text/csv"
+    else:
+        content = reporting.to_pdf_html(query, findings, summary)
+        media_type = "text/html"
+    return Response(
+        content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="specter-run-{run_id}.{report_format}"'
+            )
+        },
+    )
 
 
 @app.get("/api/runs/{run_id}/provenance")

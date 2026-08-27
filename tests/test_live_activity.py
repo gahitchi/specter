@@ -2,6 +2,7 @@
 
 import asyncio
 import dataclasses
+import hashlib
 
 import httpx
 import pytest
@@ -71,6 +72,12 @@ async def test_client_reports_request_lifecycle(status_code: int, outcome: str) 
     assert events[1]["status_code"] == status_code
     assert "do-not-display" not in events[0]["url"]
     assert "q=alice" in events[0]["url"]
+    receipt = client.latest_evidence("process:7")
+    assert receipt["content_sha256"] == hashlib.sha256(b"result").hexdigest()
+    assert receipt["content_bytes"] == len(b"result")
+    assert receipt["final_url"].startswith("https://api.example/search?")
+    assert "do-not-display" not in receipt["final_url"]
+    assert "q=alice" in receipt["final_url"]
 
 
 @pytest.mark.asyncio

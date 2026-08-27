@@ -4,7 +4,7 @@ dedups so the same artifact is never processed twice."""
 import pytest
 
 from recon import engine as engine_mod
-from recon.engine import GraphScanEngine
+from recon.engine import GraphScanEngine, ScanCancelled
 from recon.graph_models import Artifact, ArtifactType
 from recon.models import Finding, Query, Verdict
 from recon.modules.base import Module
@@ -42,6 +42,19 @@ async def _run(query, settings=None):
     eng = GraphScanEngine(query) if settings is None else GraphScanEngine(query, settings)
     events = [ev async for ev in eng.stream()]
     return eng, events
+
+
+@pytest.mark.asyncio
+async def test_engine_honors_durable_job_cancellation_before_collection():
+    async def cancelled() -> bool:
+        return True
+
+    engine = GraphScanEngine(
+        Query(username="alice"), cancellation_requested=cancelled
+    )
+    with pytest.raises(ScanCancelled, match="cancelled by user"):
+        [event async for event in engine.stream()]
+    assert engine.stop_reason == "cancelled by user"
 
 
 @pytest.mark.asyncio

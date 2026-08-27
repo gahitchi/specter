@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from recon.engine import _Edge
 from recon.graph_models import Artifact, ArtifactType
 from recon.keys import VAULT
-from recon.models import Query
+from recon.models import Finding, Query, Verdict
 from recon.server import app
 from recon import server
 from recon.store import get_db, repo
@@ -95,61 +95,144 @@ def test_scan_rejects_empty_or_oversized_payload():
 
 
 def test_scan_accepts_one_auto_classified_subject(monkeypatch):
-    seen = {}
+    monkeypatch.setattr(server, "_start_local_job", lambda _job_id: None)
+    response = client.post("/api/scan", json={
+        "subject": "@Alice",
+        "authorized": True,
+        "authorization_basis": "self_owned",
+    })
 
-    async def fake_scan(query, **kwargs):
-        seen["query"] = query
-        seen["intake"] = kwargs["intake"]
-        profile = {"status": "unresolved", "title": query.username}
-        return {
-            "run_id": 12,
-            "target_id": 4,
-            "summary": {"identities": 0, "clusters": [], "profile": profile},
-            "reasoning": {},
-            "changes": [],
-            "findings": [],
-        }
-
-    monkeypatch.setattr(server, "scan", fake_scan)
-    response = client.post("/api/scan", json={"subject": "@Alice"})
-
-    assert response.status_code == 200
-    assert seen["query"].username == "alice"
-    assert seen["intake"]["kind"] == "username"
-    assert response.json()["profile"]["title"] == "alice"
+    assert response.status_code == 202
+    with get_db().session() as session:
+        job = session.get(server.repo.m.Job, response.json()["job_id"])
+        assert job.payload["query"]["username"] == "alice"
+        assert job.payload["intake"]["kind"] == "username"
 
 
 def test_scan_treats_typed_clues_as_one_query(monkeypatch):
-    seen = {}
-
-    async def fake_scan(query, **kwargs):
-        seen["query"] = query
-        seen["intake"] = kwargs["intake"]
-        return {
-            "run_id": 13,
-            "target_id": 5,
-            "summary": {"identities": 0, "clusters": [], "profile": {}},
-            "reasoning": {},
-            "changes": [],
-            "findings": [],
-        }
-
-    monkeypatch.setattr(server, "scan", fake_scan)
+    monkeypatch.setattr(server, "_start_local_job", lambda _job_id: None)
     response = client.post(
         "/api/scan",
         json={
             "name": "Alice Example",
             "username": "@Alice",
             "email": "Alice@Example.com",
+            "authorized": True,
+            "authorization_basis": "self_owned",
         },
     )
 
-    assert response.status_code == 200
-    assert seen["query"] == Query(
-        name="Alice Example", username="alice", email="alice@example.com"
+    assert response.status_code == 202
+    with get_db().session() as session:
+        job = session.get(server.repo.m.Job, response.json()["job_id"])
+        assert Query(**job.payload["query"]) == Query(
+            name="Alice Example", username="alice", email="alice@example.com"
+        )
+        assert job.payload["intake"]["kind"] == "multiple"
+        assert set(job.payload["intake"]["query_fields"]) == {
+            "name", "username", "email"
+        }
+
+
+def test_local_jobs_can_be_discovered_cancelled_and_retried(monkeypatch):
+    monkeypatch.setattr(server, "_start_local_job", lambda _job_id: None)
+    queued = client.post("/api/scan", json={
+        "username": "alice",
+        "authorized": True,
+        "authorization_basis": "self_owned",
+    })
+    job_id = queued.json()["job_id"]
+
+    active = client.get("/api/jobs?active=true").json()
+    assert [job["id"] for job in active] == [job_id]
+    cancelled = client.post(f"/api/jobs/{job_id}/cancel", json={})
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+
+    retried = client.post(f"/api/jobs/{job_id}/retry", json={})
+    assert retried.status_code == 202
+    assert retried.json()["status"] == "queued"
+
+    with get_db().session() as session:
+        terminal = server.repo.m.Job(kind="scan", payload={}, status="done")
+        session.add(terminal)
+        session.flush()
+        terminal_id = terminal.id
+    assert client.post(f"/api/jobs/{terminal_id}/cancel", json={}).status_code == 409
+
+
+def test_monitoring_requires_fresh_authorization_and_can_be_disabled():
+    with get_db().session() as session:
+        target = repo.get_or_create_target(session, Query(username="alice"))
+        target_id = target.id
+
+    rejected = client.post(
+        f"/api/targets/{target_id}/monitor",
+        json={"cadence": "daily"},
     )
-    assert seen["intake"]["kind"] == "multiple"
-    assert set(seen["intake"]["query_fields"]) == {"name", "username", "email"}
+    assert rejected.status_code == 422
+
+    enabled = client.post(
+        f"/api/targets/{target_id}/monitor",
+        json={
+            "cadence": "daily",
+            "authorized": True,
+            "authorization_basis": "self_owned",
+        },
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["enabled"] is True
+    target_row = next(row for row in client.get("/api/targets").json() if row["id"] == target_id)
+    assert target_row["monitoring"]["cadence"] == "daily"
+    assert target_row["watchlist"] is True
+
+    disabled = client.post(
+        f"/api/targets/{target_id}/monitor", json={"cadence": "off"}
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+    target_row = next(row for row in client.get("/api/targets").json() if row["id"] == target_id)
+    assert target_row["monitoring"]["cadence"] == "off"
+    assert target_row["watchlist"] is False
+
+
+def test_saved_run_reports_are_readable_and_keep_evidence_receipts():
+    with get_db().session() as session:
+        target = repo.get_or_create_target(session, Query(username="alice"))
+        run = repo.create_run(session, target)
+        repo.add_observation(
+            session,
+            run,
+            Finding(
+                source="username:example",
+                category="username",
+                label="Example profile",
+                verdict=Verdict.FOUND,
+                confidence=0.91,
+                reasons=["public profile observed"],
+                trace={
+                    "request": {
+                        "status": 200,
+                        "content_sha256": "a" * 64,
+                        "content_bytes": 120,
+                    }
+                },
+            ),
+        )
+        repo.finish_run(session, run, "done", {"hits": 1, "total": 1})
+        run_id = run.id
+
+    report = client.get(f"/api/runs/{run_id}/report/html")
+    assert report.status_code == 200
+    assert "attachment" in report.headers["content-disposition"]
+    assert "Executive assessment" in report.text
+    assert "Example profile" in report.text
+    assert "receipt aaaaaaaaaaaa" in report.text
+
+    csv_report = client.get(f"/api/runs/{run_id}/report/csv")
+    assert csv_report.status_code == 200
+    assert "content_sha256" in csv_report.text
+    assert "a" * 64 in csv_report.text
 
 
 def test_live_search_serializes_temporal_datetimes(monkeypatch):
@@ -164,7 +247,9 @@ def test_live_search_serializes_temporal_datetimes(monkeypatch):
 
     monkeypatch.setattr(server, "run_stream", fake_run_stream)
 
-    response = client.get("/api/search?username=alice")
+    response = client.get(
+        "/api/search?username=alice&authorized=true&authorization_basis=self_owned"
+    )
     events = [
         json.loads(line.removeprefix("data: "))
         for line in response.text.splitlines()

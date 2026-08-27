@@ -207,6 +207,14 @@ class Module:
                 f.confidence_dimensions = default_dimensions(
                     f.confidence, rel, f.completeness, f.extractions
                 )
+            receipt = ctx.client.latest_evidence(ctx.activity_parent_id)
+            if receipt is not None:
+                trace = dict(f.trace or {})
+                trace["request"] = {
+                    **receipt,
+                    **dict(trace.get("request") or {}),
+                }
+                f.trace = trace
             f.data = {**f.data, "source_reliability": rel}
             return f
 

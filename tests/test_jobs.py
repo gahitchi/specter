@@ -9,6 +9,7 @@ from recon.config import SETTINGS
 from recon.jobs.base import LocalQueue
 from recon.jobs import worker as worker_mod
 from recon.jobs.activity import DurableActivityWriter
+from recon import server
 
 
 @pytest.mark.asyncio
@@ -109,6 +110,54 @@ def test_finished_jobs_are_pruned_after_retention_period():
     assert queue.lease() is None
     with get_db().session() as session:
         assert session.get(m.Job, job_id) is None
+
+
+def test_jobs_can_be_cancelled_retried_and_released():
+    queue = LocalQueue()
+    job_id = queue.enqueue("scan", {"query": {"username": "alice"}})
+
+    assert queue.request_cancel(job_id) == "cancelled"
+    assert queue.cancellation_requested(job_id) is True
+    assert queue.retry(job_id) == "queued"
+    assert queue.recoverable_ids() == [job_id]
+
+    assert queue.claim(job_id)["id"] == job_id
+    assert queue.request_cancel(job_id) == "cancel_requested"
+    queue.mark_cancelled(job_id)
+    assert queue.status(job_id) == "cancelled"
+
+    assert queue.retry(job_id) == "queued"
+    assert queue.claim(job_id)["id"] == job_id
+    queue.release(job_id)
+    assert queue.status(job_id) == "queued"
+
+
+@pytest.mark.asyncio
+async def test_local_application_retries_a_failed_background_job(monkeypatch):
+    from recon.store import get_db
+    from recon.store import models_db as m
+
+    queue = LocalQueue()
+    job_id = queue.enqueue("scan", {"query": {"username": "alice"}})
+    calls = 0
+
+    async def flaky_scan(_query, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("temporary source failure")
+        return {"run_id": None}
+
+    monkeypatch.setattr(server, "_queue", lambda: queue)
+    monkeypatch.setattr(server, "scan", flaky_scan)
+
+    await server._run_local_job(job_id)
+
+    with get_db().session() as session:
+        job = session.get(m.Job, job_id)
+        assert job.status == "done"
+        assert job.attempts == 2
+    assert calls == 2
 
 
 @pytest.mark.asyncio

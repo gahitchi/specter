@@ -53,6 +53,21 @@ class JobQueue(ABC):
     @abstractmethod
     def status(self, job_id: int) -> Optional[str]: ...
 
+    @abstractmethod
+    def request_cancel(self, job_id: int) -> Optional[str]: ...
+
+    @abstractmethod
+    def cancellation_requested(self, job_id: int) -> bool: ...
+
+    @abstractmethod
+    def mark_cancelled(self, job_id: int) -> None: ...
+
+    @abstractmethod
+    def retry(self, job_id: int) -> Optional[str]: ...
+
+    @abstractmethod
+    def release(self, job_id: int) -> None: ...
+
 
 class LocalQueue(JobQueue):
     def __init__(self, settings: Settings = SETTINGS) -> None:
@@ -91,6 +106,16 @@ class LocalQueue(JobQueue):
             ),
         )
 
+    def _cancel_orphaned_requests(self, session, stale_before: dt.datetime) -> None:
+        session.execute(
+            update(m.Job)
+            .where(
+                m.Job.status == "cancel_requested",
+                m.Job.leased_at < stale_before,
+            )
+            .values(status="cancelled", leased_at=None, error=None)
+        )
+
     def _expire_exhausted(self, session, stale_before: dt.datetime) -> None:
         session.execute(
             update(m.Job)
@@ -106,7 +131,7 @@ class LocalQueue(JobQueue):
         cutoff = now - dt.timedelta(days=self.settings.job_retention_days)
         session.execute(
             delete(m.Job).where(
-                m.Job.status.in_(("done", "error")),
+                m.Job.status.in_(("done", "error", "cancelled")),
                 m.Job.created_at < cutoff,
             )
         )
@@ -117,6 +142,7 @@ class LocalQueue(JobQueue):
         with get_db().session() as session:
             self._prune_finished(session, now)
             self._expire_exhausted(session, stale_before)
+            self._cancel_orphaned_requests(session, stale_before)
             if session.bind.dialect.name == "postgresql":
                 job = session.execute(
                     select(m.Job)
@@ -203,6 +229,66 @@ class LocalQueue(JobQueue):
         with get_db().session() as session:
             job = session.get(m.Job, job_id)
             return job.status if job is not None else None
+
+    def request_cancel(self, job_id: int) -> Optional[str]:
+        """Cancel queued work or ask a leased worker to stop cooperatively."""
+        with get_db().session() as session:
+            job = session.get(m.Job, job_id)
+            if job is None:
+                return None
+            if job.status == "queued":
+                job.status = "cancelled"
+                job.error = None
+            elif job.status == "leased":
+                job.status = "cancel_requested"
+                job.error = None
+            return job.status
+
+    def cancellation_requested(self, job_id: int) -> bool:
+        with get_db().session() as session:
+            job = session.get(m.Job, job_id)
+            return job is not None and job.status in {"cancel_requested", "cancelled"}
+
+    def mark_cancelled(self, job_id: int) -> None:
+        with get_db().session() as session:
+            job = session.get(m.Job, job_id)
+            if job is not None:
+                job.status = "cancelled"
+                job.leased_at = None
+                job.error = None
+
+    def retry(self, job_id: int) -> Optional[str]:
+        """Requeue terminal work while preserving its earlier run for audit."""
+        with get_db().session() as session:
+            job = session.get(m.Job, job_id)
+            if job is None:
+                return None
+            if job.status in {"queued", "leased", "cancel_requested"}:
+                return job.status
+            job.status = "queued"
+            job.attempts = 0
+            job.leased_at = None
+            job.error = None
+            job.run_id = None
+            return job.status
+
+    def release(self, job_id: int) -> None:
+        """Return interrupted leased work to the queue for restart recovery."""
+        with get_db().session() as session:
+            job = session.get(m.Job, job_id)
+            if job is not None and job.status == "leased":
+                job.status = "queued"
+                job.leased_at = None
+                job.error = "application stopped; queued to resume"
+
+    def recoverable_ids(self) -> list[int]:
+        """Queued job identifiers in stable order for local startup recovery."""
+        with get_db().session() as session:
+            return list(session.execute(
+                select(m.Job.id)
+                .where(m.Job.status == "queued")
+                .order_by(m.Job.id)
+            ).scalars())
 
 
 def get_queue() -> JobQueue:

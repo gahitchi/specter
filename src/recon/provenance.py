@@ -109,9 +109,11 @@ def finding_trace(*, module: str, source: str, rule=None, ev=None,
                            "error_type": getattr(rule, "error_type", None)}
     if ev is not None:
         tr["request"] = {"status": ev.status, "final_url": ev.final_url,
-                         "elapsed_ms": ev.elapsed_ms, "blocked": ev.blocked}
+                         "elapsed_ms": ev.elapsed_ms, "blocked": ev.blocked,
+                         "content_sha256": ev.content_sha256,
+                         "content_bytes": ev.body_len}
     tr["baseline"] = None if baseline is None else {
         "status": baseline.status, "fingerprint": baseline.fingerprint,
-        "blocked": baseline.blocked,
+        "blocked": baseline.blocked, "content_sha256": baseline.content_sha256,
     }
     return tr

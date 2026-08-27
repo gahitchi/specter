@@ -15,7 +15,7 @@ from typing import AsyncIterator
 
 from .activity import ActivityCallback
 from .config import SETTINGS, Settings
-from .engine import GraphScanEngine
+from .engine import CancellationCheck, GraphScanEngine, ScanCancelled
 from .models import Finding, Query
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,8 @@ async def run_collect(query: Query, settings: Settings = SETTINGS,
 async def scan(query: Query, *, label: str | None = None, watchlist: bool = False,
                settings: Settings = SETTINGS, owner_id: int | None = None,
                activity_callback: ActivityCallback | None = None,
-               intake: dict | None = None) -> dict:
+               intake: dict | None = None,
+               cancellation_requested: CancellationCheck | None = None) -> dict:
     """Durable scan: persist a Run + Observations + the discovery graph, correlate
     into the identity graph, and diff against the previous run for change detection.
 
@@ -88,14 +89,12 @@ async def scan(query: Query, *, label: str | None = None, watchlist: bool = Fals
 
     target_id, run_id = await asyncio.to_thread(_open)
 
-    from .source_pack import uses_external_pack
-
-    if settings.expansion_requested or uses_external_pack(settings):
-        from .expansion import require_ready
-        from .store import get_db
-
-        require_ready(get_db(), "source_pack")
-    engine = GraphScanEngine(query, settings, intake=intake)
+    engine = GraphScanEngine(
+        query,
+        settings,
+        intake=intake,
+        cancellation_requested=cancellation_requested,
+    )
     findings: list[Finding] = []
     activity_reporting_failed = False
 
@@ -181,7 +180,29 @@ async def scan(query: Query, *, label: str | None = None, watchlist: bool = Fals
         summary, changes = await asyncio.to_thread(_persist)
     except BaseException as exc:
         try:
-            await asyncio.to_thread(_mark_failed, str(exc))
+            if isinstance(exc, (ScanCancelled, asyncio.CancelledError)):
+                cancelled_by_user = isinstance(exc, ScanCancelled)
+
+                def _mark_interrupted() -> None:
+                    with db.session() as s:
+                        run = s.get(repo.m.Run, run_id)
+                        if run is not None:
+                            repo.finish_run(
+                                s,
+                                run,
+                                "cancelled" if cancelled_by_user else "interrupted",
+                                {
+                                    "stop_reason": (
+                                        "cancelled by user"
+                                        if cancelled_by_user
+                                        else "application stopped; queued to resume"
+                                    )
+                                },
+                            )
+
+                await asyncio.to_thread(_mark_interrupted)
+            else:
+                await asyncio.to_thread(_mark_failed, str(exc))
         except Exception:
             logger.exception("failed to persist error status for run %s", run_id)
         raise

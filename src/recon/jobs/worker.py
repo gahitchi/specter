@@ -9,15 +9,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from ..models import Query
 from ..orchestrator import scan
+from ..engine import ScanCancelled
 from .base import JobQueue, get_queue
 
 logger = logging.getLogger(__name__)
 
 
-async def process(job: dict) -> int | None:
+async def process(
+    job: dict,
+    queue: JobQueue | None = None,
+    scan_fn: Callable[..., Coroutine[Any, Any, dict]] | None = None,
+) -> int | None:
     if job["kind"] == "scan":
         from .activity import DurableActivityWriter
 
@@ -25,13 +32,22 @@ async def process(job: dict) -> int | None:
         activity = DurableActivityWriter(job["id"])
         await activity.start()
         try:
-            result = await scan(
+            async def cancellation_requested() -> bool:
+                return bool(
+                    queue
+                    and await asyncio.to_thread(
+                        queue.cancellation_requested, job["id"]
+                    )
+                )
+
+            result = await (scan_fn or scan)(
                 Query(**p.get("query", {})),
                 label=p.get("label"),
                 watchlist=p.get("watchlist", False),
                 owner_id=job.get("owner_id"),
                 activity_callback=activity.record,
                 intake=p.get("intake"),
+                cancellation_requested=cancellation_requested,
             )
         finally:
             try:
@@ -55,8 +71,10 @@ async def run_worker(queue: JobQueue | None = None, poll_interval: float = 1.0,
             await asyncio.sleep(poll_interval)
             continue
         try:
-            run_id = await process(job)
+            run_id = await process(job, queue)
             await asyncio.to_thread(queue.complete, job["id"], run_id)
+        except ScanCancelled:
+            await asyncio.to_thread(queue.mark_cancelled, job["id"])
         except Exception as e:  # noqa: BLE001
             from ..keys import redact
 

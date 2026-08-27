@@ -73,6 +73,8 @@ def test_to_pdf_html_renders_notable_findings():
     assert "Medium torvalds" in html
     assert "PyPI torvalds" not in html
     assert reporting.DISCLAIMER in html
+    assert "Executive assessment" in html
+    assert "Not observed" in html
 
 
 def test_to_pdf_html_renders_profile_standing_and_gaps():

@@ -180,7 +180,11 @@ def test_queued_scan_and_job_status_are_tenant_owned(monkeypatch):
         csrf = _login(alice_client, "alice", "correct horse battery")
         queued = alice_client.post(
             "/api/scan",
-            json={"username": "alice"},
+            json={
+                "username": "alice",
+                "authorized": True,
+                "authorization_basis": "documented_authorization",
+            },
             headers={"X-CSRF-Token": csrf},
         )
         assert queued.status_code == 202
